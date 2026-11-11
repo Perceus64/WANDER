@@ -1,0 +1,34 @@
+{
+  "name": "wander",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "WANDER — a no-code, browser-based 3D world creation engine (Rust/WASM core, React editor, three.js renderer).",
+  "scripts": {
+    "build:wasm": "cargo build --manifest-path crates/wander-core/Cargo.toml --release --target wasm32-unknown-unknown && node scripts/copy-wasm.mjs",
+    "build:runtime": "vite build -c vite.runtime.config.ts",
+    "prepare:engine": "npm run build:wasm && npm run build:runtime",
+    "dev": "npm run prepare:engine && vite",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run prepare:engine && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "cargo test --manifest-path crates/wander-core/Cargo.toml"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "geotiff": "^2.1.3",
+    "leaflet": "^1.9.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/leaflet": "^1.9.14",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.170.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3"
+  }
+}

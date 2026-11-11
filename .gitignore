@@ -1,0 +1,6 @@
+node_modules
+dist
+public/runtime
+src/wasm/*.wasm
+crates/wander-core/target
+*.log
