@@ -3,7 +3,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import { applyTransform, buildNode, disposeNode, type BuildCtx } from '../engine/build';
+import { applyTransform, buildNode, disposeNode, updateAnimations, type BuildCtx } from '../engine/build';
+import { cullByDistance } from '../engine/cull';
 import { Environment } from '../engine/environment';
 import { sampleCinematic } from '../engine/cinematic';
 import { PREFAB_MAP } from '../engine/prefabs';
@@ -620,6 +621,8 @@ export class Viewport {
     const fog = this.scene.fog as THREE.FogExp2;
     fog.density = Math.min(ed.scene.env.fogDensity, 0.8 / Math.max(this.camera.position.distanceTo(this.orbit.target), 1));
     for (const b of this.boxes) b.update();
+    if (this.frames % 8 === 0) cullByDistance(this.scene, this.camera.position, 3);
+    updateAnimations(dt);
     this.env.render(this.renderer, this.scene, this.camera);
 
     if (this.needEmit) { this.needEmit = false; ed.emit(); }

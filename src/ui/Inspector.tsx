@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ENV_PRESETS, type Env, type Kind, type Obj } from '../engine/types';
 import { PREFABS, PREFAB_MAP } from '../engine/prefabs';
-import { Area, AssetSel, Btn, Check, Color, Num, Row, Section, Sel, Slider, Txt, Vec, useEd } from './widgets';
+import { Area, AssetSel, Btn, Check, Color, Num, Row, Section, Sel, Slider, Txt, Vec, fmtBytes, useEd } from './widgets';
 import type { Editor } from '../editor/editor';
 
 type F = [key: string, label: string, type: string, opt?: any, tip?: string];
@@ -13,7 +13,7 @@ const BEHAVE: F[] = [
 const FIELDS: Partial<Record<Kind, { main: F[]; adv?: F[]; behave?: boolean }>> = {
   primitive: { main: [['shape', 'Shape', 'sel', ['box', 'sphere', 'cylinder', 'cone', 'plane']], ...MAT], adv: [['roughness', 'Roughness', 'slider', [0, 1]], ['metalness', 'Metalness', 'slider', [0, 1]], ['opacity', 'Opacity', 'slider', [0.05, 1]], ['emissive', 'Glow', 'slider', [0, 3]]], behave: true },
   prefab: { main: [['prefab', 'Asset', 'prefab'], ['color', 'Tint', 'tint']], adv: [['lightOn', 'Light on', 'boolT', null, 'Only for lamps']], behave: true },
-  model: { main: [['asset', 'Model file', 'asset', 'model']], behave: true },
+  model: { main: [['asset', 'Model file', 'asset', 'model'], ['ground', 'Stand on its base', 'bool', null, 'Centres the model and puts its lowest point on the ground, whatever origin the file was exported with'], ['collision', 'Collision', 'sel', [['box', 'One box around the model'], ['parts', 'A box per part (walk inside buildings)'], ['none', 'None (walk through)']]], ['animate', 'Play animation', 'bool'], ['clip', 'Animation no.', 'num', { step: 1, min: 0 }]], behave: true },
   text: { main: [['text', 'Text', 'area'], ['width', 'Width (m)', 'num'], ['height', 'Height (m)', 'num'], ['color', 'Text colour', 'color'], ['background', 'Background', 'color']] },
   light: { main: [['type', 'Type', 'sel', ['point', 'spot', 'directional']], ['color', 'Colour', 'color'], ['intensity', 'Intensity', 'num', { step: 1, min: 0 }], ['range', 'Range (m)', 'num', { step: 1, min: 0 }]], adv: [['angle', 'Spot angle °', 'slider', [5, 80, 1]], ['castShadow', 'Cast shadows', 'bool', null, 'Expensive: keep to one or two lights']] },
   audio: { main: [['asset', 'Sound file', 'asset', 'audio'], ['volume', 'Volume', 'slider', [0, 1]], ['loop', 'Loop', 'bool'], ['autoplay', 'Play at start', 'bool', null, 'Off = only played by events or cinematics'], ['positional', '3D positional', 'bool', null, 'Off = background music heard everywhere']], adv: [['refDistance', 'Full volume within (m)', 'num', { step: 1, min: 0.5 }], ['maxDistance', 'Silent beyond (m)', 'num', { step: 1, min: 1 }], ['fade', 'Fade in/out (s)', 'num', { min: 0 }]] },
@@ -52,6 +52,29 @@ function Field({ f, o, ed }: { f: F; o: Obj; ed: Editor }) {
   else if (type === 'vec') c = <Vec value={v} onChange={set} />;
   else if (type === 'prefab') c = <Sel value={v} onChange={set} options={PREFABS.map((p) => [p.key, `${p.cat} – ${p.name}`] as const)} />;
   return <Row label={label} tip={tip}>{c}</Row>;
+}
+
+/** Statistics of an imported model and the one-click optimiser. */
+function ModelStats({ id, ed }: { id: string; ed: Editor }) {
+  const a = ed.scene.assets[id], m = a.meta, [tex, setTex] = useState('1024'), [detail, setDetail] = useState('1'), [busy, setBusy] = useState(false);
+  const heavy = m && (m.tris > 150000 || m.maxTexture > 2048 || a.size > 15e6);
+  const run = async () => {
+    setBusy(true);
+    await new Promise((r) => setTimeout(r, 40));
+    try {
+      const r = await ed.optimiseAsset(id, { maxTexture: +tex, detail: +detail });
+      ed.toast(`Optimised “${a.name}”: ${r.before.tris.toLocaleString()} → ${r.after.tris.toLocaleString()} triangles, ${fmtBytes(r.sizeBefore)} → ${fmtBytes(r.sizeAfter)}.${r.notes.length ? ' ' + r.notes.join(' ') : ''}`, 'ok');
+    } catch (e: any) { ed.toast(`Could not optimise: ${e?.message ?? e}`, 'error'); } finally { setBusy(false); }
+  };
+  return (
+    <Section title="Model file">
+      {m ? <p className="hint">{m.tris.toLocaleString()} triangles · {m.meshes} mesh(es) · {m.materials} material(s) · {m.textures} texture(s){m.maxTexture ? ` up to ${m.maxTexture}px` : ''} · {m.size.map((v) => v.toFixed(2)).join(' × ')} m · {fmtBytes(a.size)}{m.animations ? ` · ${m.animations} animation(s)` : ''}</p> : <p className="hint">{fmtBytes(a.size)} · imported before statistics were recorded. Optimise once to analyse it.</p>}
+      {heavy && <p className="hint warn">This model is heavy for the web. Optimising it will make the world load and run faster.</p>}
+      <Row label="Max texture size" tip="Larger textures are scaled down"><Sel value={tex} onChange={setTex} options={[['4096', '4096 px (keep)'], ['2048', '2048 px'], ['1024', '1024 px'], ['512', '512 px'], ['256', '256 px']]} /></Row>
+      <Row label="Geometry detail" tip="Reduces the number of triangles while keeping the shape, textures and rigging"><Sel value={detail} onChange={setDetail} options={[['1', '100% (weld only)'], ['0.75', '75%'], ['0.5', '50%'], ['0.25', '25%']]} /></Row>
+      <div className="btns"><Btn kind="primary" disabled={busy} onClick={run} tip="Applies to every copy of this model in the world. This rewrites the stored file and cannot be undone – keep your original.">{busy ? 'Optimising…' : 'Optimise model'}</Btn></div>
+    </Section>
+  );
 }
 
 function Floors({ o, ed }: { o: Obj; ed: Editor }) {
@@ -108,8 +131,9 @@ function ObjectTab() {
         </Section>
       )}
       {o.kind === 'elevator' && <Floors o={o} ed={ed} />}
+      {o.kind === 'model' && ed.scene.assets[o.props.asset] && <ModelStats id={o.props.asset} ed={ed} />}
       {o.kind === 'group' && o.props.room && <Section title="Building"><Btn onClick={() => addStorey(ed, o)} tip="Copies this room one storey up">+ Add storey above</Btn></Section>}
-      {o.kind === 'scatter' && <Section title="Instances"><p className="hint">{o.props.items.length / 4} instances drawn in one call. Paint more with the Scatter brush (World tab); hold Shift to erase.</p><Btn onClick={() => ed.setProps(o.id, { items: [] })}>Clear all</Btn></Section>}
+      {o.kind === 'scatter' && <Section title="Instances"><p className="hint">{o.props.items.length / 4} instances, drawn in batches per ground cell and hidden beyond their draw distance. Paint more with the Scatter brush (World tab); hold Shift to erase.</p><Btn onClick={() => ed.setProps(o.id, { items: [] })}>Clear all</Btn></Section>}
       {o.kind === 'road' && <Section title="Path"><p className="hint">{o.props.points.length} control points. Follows the terrain automatically.</p></Section>}
       {o.kind === 'spawn' && <Section title="Player spawn"><p className="hint">The experience starts here. The green arrow shows the direction the player faces. Camera and movement settings are in the Player tab.</p></Section>}
       {o.kind === 'trigger' && <Section title="Trigger zone"><p className="hint">Invisible in the published world. Use it in the Events tab: “WHEN player enters zone…”.</p></Section>}
@@ -167,6 +191,7 @@ function PlayerTab() {
         <Row label="Walk speed (m/s)"><Num value={p.walkSpeed} min={0.5} onChange={(v) => set({ walkSpeed: v })} /></Row>
         <Row label="Run speed (m/s)"><Num value={p.runSpeed} min={0.5} onChange={(v) => set({ runSpeed: v })} /></Row>
         <div className="row"><Check value={p.jump} onChange={(v) => set({ jump: v })} label="Allow jumping" /><Check value={p.footsteps} onChange={(v) => set({ footsteps: v })} label="Footstep sounds" /></div>
+        <div className="row" title="Lowers the rendering resolution when the frame rate drops on slow devices, and restores it when possible"><Check value={p.autoQuality !== false} onChange={(v) => set({ autoQuality: v })} label="Automatic quality (keeps it smooth)" /></div>
         {p.jump && <Row label="Jump height (m)"><Num value={p.jumpHeight} min={0.2} max={10} onChange={(v) => set({ jumpHeight: v })} /></Row>}
       </Section>
       <Section title="Interaction"><Row label="Reach distance (m)"><Num value={p.interactDistance} min={0.5} onChange={(v) => set({ interactDistance: v })} /></Row></Section>

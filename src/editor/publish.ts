@@ -36,6 +36,8 @@ export function validate(ed: Editor, quick = false): Issue[] {
   for (const a of Object.values(s.assets)) {
     const b = ed.blobs.get(a.id);
     if (a.type === 'model' && b && !/\.glb$/i.test(a.file ?? 'x.glb')) add('warn', 'Assets', `Model “${a.name}” is not a .glb file. Models with external textures or buffers will not load in published builds.`);
+    if (a.meta && a.meta.tris > 150000) add('warn', 'Performance', `Model “${a.name}” has ${a.meta.tris.toLocaleString()} triangles. Select it and use Optimise model in the Inspector to reduce it.`);
+    if (a.meta && a.meta.maxTexture > 2048) add('warn', 'Performance', `Model “${a.name}” has ${a.meta.maxTexture}px textures. Optimise it to 1024–2048px to save memory and loading time.`);
     if (a.size > 15e6) add('warn', 'Performance', `“${a.name}” is ${(a.size / 1e6).toFixed(1)} MB. Large files slow down loading – compress or reduce it.`);
   }
   const noAudio = by((o) => o.kind === 'audio' && !o.props.asset);
@@ -110,7 +112,7 @@ function indexHtml(p: Project, hasThumb: boolean) {
   return `<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
+<meta charset="utf-8"><link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(p.name)}</title>
 <meta name="description" content="${esc(p.description || p.name)}">

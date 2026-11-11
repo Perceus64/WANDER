@@ -4,3 +4,4 @@ public/runtime
 src/wasm/*.wasm
 crates/wander-core/target
 *.log
+public/draco

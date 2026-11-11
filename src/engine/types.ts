@@ -80,6 +80,8 @@ export interface PlayerSettings {
   eyeHeight: number;
   interactDistance: number;
   footsteps: boolean;
+  /** Lower the rendering resolution automatically when the frame rate drops (default on). */
+  autoQuality?: boolean;
 }
 
 export interface Condition { name: string; op: '=' | '!=' | '>' | '<' | '>=' | '<='; value: number }
@@ -109,7 +111,9 @@ export interface Cinematic {
   letterbox: boolean;
 }
 
-export interface Asset { id: string; name: string; type: 'model' | 'image' | 'audio' | 'video'; mime: string; size: number; file?: string }
+/** What the importer found in a 3D model; drives the Inspector statistics, validation and previews. */
+export interface ModelMeta { tris: number; verts: number; meshes: number; materials: number; textures: number; maxTexture: number; size: [number, number, number]; animations: number; thumb?: string }
+export interface Asset { id: string; name: string; type: 'model' | 'image' | 'audio' | 'video'; mime: string; size: number; file?: string; meta?: ModelMeta }
 export interface UserPrefab { id: string; name: string; root: string; objects: Record<string, Obj> }
 
 export interface Scene {
@@ -210,7 +214,7 @@ export const KIND_DEFAULTS: Record<Kind, Record<string, any>> = {
   group: {},
   primitive: { shape: 'box', color: '#b8bcc4', roughness: 0.8, metalness: 0, opacity: 1, texture: '', solid: true },
   prefab: { prefab: 'tree_pine', solid: true },
-  model: { asset: '', solid: true },
+  model: { asset: '', solid: true, collision: 'box', ground: false, animate: true, clip: 0 },
   text: { text: 'Sign', width: 2, height: 0.6, color: '#ffffff', background: '#20242c' },
   light: { type: 'point', color: '#ffe2b0', intensity: 12, range: 14, angle: 40, castShadow: false },
   audio: { asset: '', volume: 0.8, loop: true, positional: true, refDistance: 4, maxDistance: 40, autoplay: true, fade: 1 },

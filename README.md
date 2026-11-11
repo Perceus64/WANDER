@@ -42,7 +42,10 @@ Editor hosting and published experiences are separate: the editor is this site; 
 Everything below is driven from the visual editor; nothing requires code.
 
 - **Editor**: 3D viewport (orbit, pan, zoom, right-drag + WASD fly), asset library with search, scene tree with folders, inspector, toolbar, bottom panel (events, cinematic timeline, performance), tooltips, getting-started guide, keyboard shortcuts.
-- **Objects**: drag and drop from the library, move/rotate/scale gizmos, grid and surface snapping, multi-select, duplicate, copy/paste, group/ungroup, lock, hide, undo/redo, reusable prefabs, import of GLB/GLTF, images, audio and video.
+- **Objects**: drag and drop from the library, move/rotate/scale gizmos, grid and surface snapping, multi-select, duplicate, copy/paste, group/ungroup, lock, hide, undo/redo, reusable prefabs.
+- **Built-in assets**: about 115 hand-modelled low-poly objects (trees, plants, rocks, houses, buildings, furniture, office furniture and equipment, computers and network gear, vehicles, street furniture, museum pieces, industrial equipment, lighting, architectural parts). Each is one flat-shaded mesh with baked colour variation and shading, so it costs a single draw call and can be instanced by the thousand. The library shows a rendered preview of every asset.
+- **Importing your own assets**: GLB, GLTF, OBJ (+MTL), FBX, STL, PLY and Collada, as single files, as a multi-file selection (model plus its textures/.bin/.mtl) or as a zip. Draco- and Meshopt-compressed glTF is read. Everything is stored in the project as one self-contained GLB, with a preview and statistics (triangles, textures, size). Imported models can play their animation, stand on their base regardless of the exported origin, and collide as one box, one box per part, or not at all. Oversized or tiny models are scaled to a sensible size when dropped. Images, GIFs, audio and video import as before.
+- **Optimising**: an *Optimise model* panel in the Inspector caps texture resolution and reduces triangle count (meshoptimizer) while keeping UVs and rigging. The publish report flags models over 150,000 triangles or with textures above 2048 px. At run time, scattered vegetation is split into ground cells that are frustum- and distance-culled, small props stop drawing when far away, small decorations cast no shadows, and an automatic-quality option lowers the rendering resolution when the frame rate drops.
 - **Terrain**: procedural creation, raise/lower/smooth/flatten brushes, eight paintable materials plus automatic blending by slope and elevation, scatter brushes (forest, meadow, bushes, rocks) with density and randomness, roads, paths and rivers that follow the ground, water.
 - **Real-world import**: map search, rectangle selection, resolution choice, elevation in metres at true horizontal scale, vertical exaggeration, tile stitching, missing-data fill, stored attribution, "restore original" after sculpting. Optional roads, rivers, lakes, coastlines and building footprints from OpenStreetMap, all editable afterwards. File import: PNG heightmaps, RAW, SRTM `.hgt`, GeoTIFF/DEM, GeoJSON.
 - **Large worlds**: terrain split into chunks, built in the background a few per frame, four detail levels by distance, instanced vegetation, a world panel with chunk status.
@@ -73,7 +76,7 @@ The specification asks for the full engine to be built in phases. These parts ar
 | Caves | Not possible on a heightfield | Add cave pieces as meshes, or a voxel layer |
 | Shapefiles, raw `.osm` | Rejected with a hint to convert to GeoJSON | Add a shapefile reader adapter |
 | Satellite imagery | Not included, because imagery licences differ from elevation licences | Provider adapters with per-source attribution; draping a user-supplied orthophoto |
-| Asset library | Procedural low-poly primitives | Richer model packs; texture compression (KTX2) and mesh optimisation on import |
+| Asset library | Built-in low-poly set, plus your own imports | Downloadable model packs; KTX2/Basis texture compression (such files are currently rejected with a message) |
 | Multi-floor tools | Build each storey with the "build at height" setting | One-click "duplicate floor" |
 
 ## Data sources and attribution
@@ -83,4 +86,4 @@ The specification asks for the full engine to be built in phases. These parts ar
 
 ## Testing notes
 
-`npm test` runs the Rust unit tests. The editor, all templates, play mode, saving and reloading, project export/import, geographic import (with mocked network responses) and published builds were exercised in headless Chrome. The geographic services themselves and real GPUs were not part of that run.
+`npm test` runs the Rust unit tests. The editor, all templates, play mode, saving and reloading, project export/import, geographic import (with mocked network responses) and published builds were exercised in headless Chrome. Model import was exercised with OBJ+MTL+texture, STL and a zipped multi-file animated glTF, including optimisation, saving, play mode and a published build. FBX, PLY, Collada and Draco-compressed files go through the same pipeline but were not tested with real files. The geographic services themselves and real GPUs were not part of that run.

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { PREFABS, PREFAB_CATEGORIES } from '../engine/prefabs';
+import { prefabThumb, warmThumbs } from '../editor/thumbs';
 import { CHUNK } from '../engine/terrain';
 import type { Obj } from '../engine/types';
 import type { DropPayload, Editor, Tool } from '../editor/editor';
@@ -34,22 +35,24 @@ const BUILDING: typeof BASICS = [
   { label: 'Escalator', icon: '⇗', d: { type: 'kind', key: 'platform', name: 'Escalator', props: { size: [1.2, 0.2, 1.4], offset: [0, 3.2, -5.5], speed: 1.1, pause: 1.2, mode: 'loop', color: '#5f6770' } }, tip: 'Inclined mover that carries visitors between two storeys' },
 ];
 
-function Item({ label, icon, d, tip, ed }: { label: string; icon: string; d: DropPayload; tip?: string; ed: Editor }) {
+function Item({ label, icon, d, tip, ed, img }: { label: string; icon: string; d: DropPayload; tip?: string; ed: Editor; img?: string }) {
   return (
     <div className="item" draggable title={`${tip ? tip + ' — ' : ''}drag into the world, or double-click to add`}
       onDragStart={(e) => { e.dataTransfer.setData('application/wander', JSON.stringify(d)); e.dataTransfer.effectAllowed = 'copy'; }}
       onDoubleClick={() => { const r = ed.viewport?.renderer.domElement.getBoundingClientRect(); if (r) ed.dropAsset(d, r.left + r.width / 2, r.top + r.height * 0.6); }}>
-      <span className="ico">{icon}</span><span>{label}</span>
+      {img ? <img className="thumb" src={img} alt="" draggable={false} /> : <span className="ico">{icon}</span>}<span>{label}</span>
     </div>
   );
 }
 
-const CAT_ICON: Record<string, string> = { Trees: '🌲', Plants: '🌿', Rocks: '🪨', Houses: '🏠', Buildings: '🏢', Furniture: '🪑', Vehicles: '🚗', Signs: '🪧', 'Street furniture': '🏮', 'Museum objects': '🏺', 'Interior decorations': '🖼', 'Industrial equipment': '⚙️', Lighting: '💡', 'Architectural components': '🏛' };
+const CAT_ICON: Record<string, string> = { Office: '💼', Computers: '🖥', Trees: '🌲', Plants: '🌿', Rocks: '🪨', Houses: '🏠', Buildings: '🏢', Furniture: '🪑', Vehicles: '🚗', Signs: '🪧', 'Street furniture': '🏮', 'Museum objects': '🏺', 'Interior decorations': '🖼', 'Industrial equipment': '⚙️', Lighting: '💡', 'Architectural components': '🏛' };
 
 function Library() {
   const ed = useEd(), [q, setQ] = useState(''), file = useRef<HTMLInputElement>(null);
   const s = q.trim().toLowerCase(), match = (t: string) => !s || t.toLowerCase().includes(s);
   const assets = Object.values(ed.scene.assets);
+  const [, setThumbs] = useState(0);
+  useEffect(() => warmThumbs(PREFABS.map((p) => p.key), () => setThumbs((n) => n + 1)), []);
   return (
     <>
       <div className="search"><input className="in" placeholder="Search assets…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search assets" /></div>
@@ -58,16 +61,16 @@ function Library() {
         <Section title="Building parts"><div className="grid">{BUILDING.filter((b) => match(b.label)).map((b) => <Item key={b.label} {...b} ed={ed} />)}</div></Section>
         {PREFAB_CATEGORIES.map((cat) => {
           const list = PREFABS.filter((p) => p.cat === cat && (match(p.name) || match(cat)));
-          return list.length ? <Section key={cat} title={cat} open={!!s || cat === 'Trees'}><div className="grid">{list.map((p) => <Item key={p.key} label={p.name} icon={CAT_ICON[cat] ?? '◆'} d={{ type: 'prefab', key: p.key }} ed={ed} />)}</div></Section> : null;
+          return list.length ? <Section key={cat} title={cat} open={!!s || cat === 'Trees'}><div className="grid tiles">{list.map((p) => <Item key={p.key} label={p.name} icon={CAT_ICON[cat] ?? '◆'} img={prefabThumb(p.key)} d={{ type: 'prefab', key: p.key }} ed={ed} />)}</div></Section> : null;
         })}
         <Section title="My files" extra={<span className="count">{assets.length}</span>}>
-          <input ref={file} type="file" multiple hidden accept=".glb,.gltf,.png,.jpg,.jpeg,.webp,.gif,.mp3,.wav,.ogg,.m4a,.flac,.mp4,.webm" onChange={(e) => { if (e.target.files) ed.importFiles(e.target.files); e.target.value = ''; }} />
-          <Btn onClick={() => file.current?.click()} tip="3D models (GLB/GLTF), images, audio, video. You can also drop files anywhere on the window.">Import files…</Btn>
+          <input ref={file} type="file" multiple hidden accept=".glb,.gltf,.obj,.mtl,.fbx,.stl,.ply,.dae,.bin,.zip,.png,.jpg,.jpeg,.webp,.gif,.mp3,.wav,.ogg,.m4a,.flac,.mp4,.webm" onChange={(e) => { if (e.target.files) ed.importFiles(e.target.files); e.target.value = ''; }} />
+          <Btn onClick={() => file.current?.click()} tip="3D models: GLB, GLTF, OBJ, FBX, STL, PLY, DAE – select a model together with its textures/.bin/.mtl, or a zip of them. Also images, GIFs, audio and video. You can drop files anywhere on the window.">Import models and media…</Btn>
           <div className="list">
             {assets.filter((a) => match(a.name)).map((a) => (
               <div key={a.id} className="asset" draggable onDragStart={(e) => e.dataTransfer.setData('application/wander', JSON.stringify({ type: 'asset', key: a.id }))} title="Drag into the world">
-                <span className="ico">{{ model: '📦', image: '🖼', audio: '🎵', video: '🎬' }[a.type]}</span>
-                <span className="grow">{a.name}<small>{a.type} · {fmtBytes(a.size)} · used {ed.assetUsage(a.id)}×</small></span>
+                {a.meta?.thumb ? <img className="thumb" src={a.meta.thumb} alt="" draggable={false} /> : <span className="ico">{{ model: '📦', image: '🖼', audio: '🎵', video: '🎬' }[a.type]}</span>}
+                <span className="grow">{a.name}<small>{a.meta ? `${a.meta.tris.toLocaleString()} tris` : a.type} · {fmtBytes(a.size)} · used {ed.assetUsage(a.id)}×</small></span>
                 <button className="btn mini" title="Remove file from project" onClick={() => (ed.assetUsage(a.id) === 0 || confirm(`“${a.name}” is used by ${ed.assetUsage(a.id)} object(s). Remove anyway?`)) && ed.removeAsset(a.id)}>✕</button>
               </div>
             ))}

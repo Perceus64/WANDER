@@ -392,10 +392,13 @@ export class Editor {
     } else if (d.type === 'asset') {
       const a = this.scene.assets[d.key];
       if (!a) return;
-      if (a.type === 'model') this.create('model', a.name, { asset: a.id }, pos());
+      if (a.type === 'model') {
+        const o = this.create('model', a.name, { asset: a.id, ground: true }, pos()), big = a.meta ? Math.max(...a.meta.size) : 1;
+        if (big > 60 || (big > 0 && big < 0.05)) { const k = round(3 / big, 5); this.setTransform(o.id, { scale: [k, k, k] }); this.toast(`“${a.name}” is ${big > 60 ? 'very large' : 'very small'} (${big.toFixed(big < 1 ? 3 : 0)} m), so it was scaled to about 3 m. Adjust Scale in the Inspector.`); }
+      }
       else if (a.type === 'audio') this.create('audio', a.name, { asset: a.id }, pos(1.5));
-      else if (a.type === 'image') { const o = this.create('primitive', a.name, { shape: 'box', texture: a.id, color: '#ffffff', solid: false }, pos(1.5)); this.setTransform(o.id, { scale: [1.6, 1.1, 0.04] }); }
-      else this.toast('Videos are used inside information boxes: select an info point and choose the video there.');
+      else if (a.type === 'image') this.create('screen', a.name, { media: a.id }, pos(0.8));
+      else this.create('screen', a.name, { media: a.id }, pos());
     } else if (d.type === 'userPrefab') {
       const up = this.project.prefabs.find((x) => x.id === d.key);
       if (!up) return;
@@ -555,21 +558,72 @@ export class Editor {
     return id;
   }
 
-  async importFiles(files: FileList | File[]) {
+  /**
+   * Import files into the project. Models may arrive as one file, as a multi-file selection
+   * (model + textures/.bin/.mtl) or inside a zip; they are analysed and stored as GLB.
+   */
+  async importFiles(input: FileList | File[]) {
+    const picked = Array.from(input); // copy now: file inputs are cleared right after the change event
+    const imp = await import('./importer');
+    let files: File[];
+    try { files = await imp.expandArchives(picked); } catch { this.toast('That zip archive could not be read.', 'error'); return; }
+    const models = files.filter((f) => imp.MODEL_EXT.includes(imp.ext(f.name)));
+    const needsSiblings = models.some((f) => ['gltf', 'obj', 'fbx', 'dae'].includes(imp.ext(f.name)));
     let n = 0;
-    for (const f of Array.from(files)) {
-      const ext = f.name.split('.').pop()!.toLowerCase();
-      const type: Asset['type'] | null = ['glb', 'gltf'].includes(ext) ? 'model' : ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext) ? 'image'
-        : ['mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(ext) ? 'audio' : ['mp4', 'webm'].includes(ext) ? 'video' : null;
-      if (!type) { this.toast(`${f.name}: unsupported file type. Use GLB/GLTF, PNG/JPG/WebP, MP3/WAV/OGG or MP4/WebM.`, 'error'); continue; }
-      if (ext === 'gltf') this.toast(`${f.name}: .gltf files with external buffers or textures cannot be resolved – export a single .glb for reliable results.`);
-      const id = uid('a');
-      this.scene.assets[id] = { id, name: f.name.replace(/\.[^.]+$/, ''), type, mime: f.type || 'application/octet-stream', size: f.size, file: f.name };
-      this.blobs.set(id, f);
-      this.blobDirty.add(id);
+    for (const f of models) {
+      this.toast(`Importing ${f.name}…`);
+      await new Promise((r) => setTimeout(r, 30));
+      try {
+        const r = await imp.importModel(f, files.filter((x) => x !== f && imp.isResource(x.name)));
+        const id = this.addAsset(new File([r.blob], r.fileName, { type: 'model/gltf-binary' }), 'model');
+        this.scene.assets[id].meta = r.meta;
+        const m = r.meta;
+        this.toast(`${f.name}: ${m.tris.toLocaleString()} triangles, ${m.textures} texture(s)${m.animations ? `, ${m.animations} animation(s)` : ''}${r.notes.length ? ` – ${r.notes.join(', ')}` : ''}.`, 'ok');
+        if (m.tris > 150000 || m.maxTexture > 2048) this.toast(`${f.name} is heavy for the web. Select it in the world and use Optimise in the Inspector.`);
+        n++;
+      } catch (e: any) {
+        console.warn(e);
+        this.toast(`${f.name} could not be imported: ${e?.message ?? e}`, 'error');
+      }
+    }
+    for (const f of files) {
+      const x = imp.ext(f.name);
+      if (imp.MODEL_EXT.includes(x) || (needsSiblings && imp.isResource(f.name))) continue;
+      const type: Asset['type'] | null = ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(x) ? 'image' : ['mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(x) ? 'audio' : ['mp4', 'webm'].includes(x) ? 'video' : null;
+      if (!type) { if (!imp.isResource(f.name)) this.toast(`${f.name}: unsupported file type. Models: GLB, GLTF, OBJ, FBX, STL, PLY, DAE (or a zip of them). Media: PNG/JPG/WebP/GIF, MP3/WAV/OGG, MP4/WebM.`, 'error'); continue; }
+      const mime = f.type || ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', mp4: 'video/mp4', webm: 'video/webm' } as Record<string, string>)[x] || '';
+      this.addAsset(new File([f], f.name, { type: mime }), type);
       n++;
     }
-    if (n) { this.touch(); this.toast(`Imported ${n} file${n > 1 ? 's' : ''}`, 'ok'); }
+    if (n) { this.touch(); if (n > models.length) this.toast(`Imported ${n} file${n > 1 ? 's' : ''}`, 'ok'); }
+  }
+
+  /** Swap the stored file of an asset (used by the optimiser) and rebuild everything that shows it. */
+  replaceAsset(id: string, blob: Blob, patch: Partial<Asset>) {
+    const a = this.scene.assets[id];
+    if (!a) return;
+    Object.assign(a, patch, { size: blob.size });
+    this.blobs.set(id, blob);
+    this.blobDirty.add(id);
+    const u = this.urls.get(id);
+    if (u) { URL.revokeObjectURL(u); this.urls.delete(id); }
+    clearAssetCaches();
+    this.viewport?.rebuildKinds(['model']);
+    this.touch();
+  }
+
+  /** Shrink a model: cap texture size and reduce triangles. Returns a before/after summary. */
+  async optimiseAsset(id: string, o: { maxTexture: number; detail: number }) {
+    const a = this.scene.assets[id], blob = this.blobs.get(id);
+    if (!a || !blob) throw new Error('The model file is missing.');
+    const imp = await import('./importer');
+    const l = await imp.loadModel(new File([blob], (a.file ?? 'model.glb').replace(/\.[^.]+$/, '') + '.glb'));
+    const before = a.meta ?? imp.analyse(l, false), sizeBefore = a.size;
+    const notes = await imp.optimise(l, o);
+    const out = await imp.toGLB(l);
+    const meta = imp.analyse(await imp.loadModel(new File([out], 'model.glb')));
+    this.replaceAsset(id, out, { meta, mime: 'model/gltf-binary', file: (a.file ?? a.name).replace(/\.[^.]+$/, '') + '.glb' });
+    return { before, after: meta, sizeBefore, sizeAfter: out.size, notes };
   }
 
   removeAsset(id: string) {
@@ -615,12 +669,21 @@ export class Editor {
       if (this.terrainDirty) for (const [k, b] of this.terrainBlobs()) write.set(k, b);
       const thumb = this.viewport?.thumbnail();
       if (thumb) this.project.thumbnail = thumb;
-      await store.putProject(this.project, write, keep);
-      if (versionLabel) await store.addVersion(this.project, versionLabel);
-      await store.setMeta('last', this.project.id);
+      // Flags are cleared before the asynchronous write: anything changed while it runs is marked dirty again and kept for the next save.
+      const hadTerrain = this.terrainDirty;
       this.blobDirty.clear();
       this.terrainDirty = false;
       this.dirty = false;
+      try {
+        await store.putProject(this.project, write, keep);
+      } catch (e) {
+        for (const id of write.keys()) if (!id.startsWith('terrain/')) this.blobDirty.add(id);
+        this.terrainDirty ||= hadTerrain;
+        this.dirty = true;
+        throw e;
+      }
+      if (versionLabel) await store.addVersion(this.project, versionLabel);
+      await store.setMeta('last', this.project.id);
       this.savedAt = Date.now();
     } catch (e: any) {
       this.toast(`Saving failed: ${e?.message ?? e}. Export the project to keep a copy.`, 'error');

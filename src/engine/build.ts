@@ -2,6 +2,8 @@
 // the runtime so "what you build is what gets published".
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { AssetProvider, Obj, Scene } from './types';
 import { PREFAB_MAP, prefabCollider, prefabGeometry, prefabMaterial } from './prefabs';
 
@@ -17,7 +19,10 @@ export interface ColliderDesc { box: number[]; ref: THREE.Object3D; dynamic?: bo
 type Builder = (o: Obj, node: THREE.Group, ctx: BuildCtx) => void;
 
 const texCache = new Map<string, Promise<THREE.Texture | null>>();
-const gltfCache = new Map<string, Promise<THREE.Object3D | null>>();
+const gltfCache = new Map<string, Promise<{ scene: THREE.Object3D; animations: THREE.AnimationClip[] } | null>>();
+const mixers = new Set<THREE.AnimationMixer>();
+/** Advance every playing model animation (called once per frame by the editor viewport and the runtime). */
+export function updateAnimations(dt: number) { for (const m of mixers) m.update(dt); }
 const iconCache = new Map<string, THREE.Texture>();
 
 export function clearAssetCaches() { texCache.clear(); gltfCache.clear(); }
@@ -179,7 +184,10 @@ const BUILDERS: Partial<Record<Obj['kind'], Builder>> = {
     const def = PREFAB_MAP[o.props.prefab];
     let mat: THREE.Material = prefabMaterial();
     if (o.props.color) { mat = prefabMaterial().clone(); (mat as THREE.MeshStandardMaterial).color.set(o.props.color); }
-    node.add(new THREE.Mesh(prefabGeometry(o.props.prefab), mat));
+    const mesh = new THREE.Mesh(prefabGeometry(o.props.prefab), mat);
+    mesh.userData.cullDist = THREE.MathUtils.clamp((mesh.geometry.boundingSphere?.radius ?? 1) * 240, 140, 5000);
+    if (def?.small) mesh.userData.noShadowCast = true;
+    node.add(mesh);
     const c = o.props.solid !== false ? prefabCollider(o.props.prefab) : null;
     if (c) col(node, c);
     if (def?.light && o.props.lightOn !== false) {
@@ -189,21 +197,43 @@ const BUILDERS: Partial<Record<Obj['kind'], Builder>> = {
     }
   },
   model(o, node, ctx) {
-    const ph = wire(1, 1, 1, 0x8899aa);
+    const ph = wire(1, 1, 1, 0x8899aa), p = o.props;
     ph.position.y = 0.5;
     node.add(ph);
-    if (!o.props.asset) return;
-    if (!gltfCache.has(o.props.asset))
-      gltfCache.set(o.props.asset, ctx.assets.url(o.props.asset).then((u) => (u ? new GLTFLoader().loadAsync(u) : null)).then((g) => g?.scene ?? null).catch((e) => { console.warn('Model failed to load', e); return null; }));
-    node.userData.ready = gltfCache.get(o.props.asset)!.then((src) => {
-      if (!src) return;
-      const inst = src.clone(true);
+    if (!p.asset) return;
+    if (!gltfCache.has(p.asset))
+      gltfCache.set(p.asset, ctx.assets.url(p.asset).then((u) => (u ? new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(u) : null)).then((g) => (g ? { scene: g.scene, animations: g.animations } : null)).catch((e) => { console.warn('Model failed to load', e); return null; }));
+    let alive = true, mixer: THREE.AnimationMixer | null = null;
+    node.userData.dispose = () => { alive = false; if (mixer) { mixer.stopAllAction(); mixers.delete(mixer); } };
+    node.userData.ready = gltfCache.get(p.asset)!.then((src) => {
+      if (!src || !alive) return;
+      const inst = src.animations.length ? cloneSkinned(src.scene) : src.scene.clone(true);
       inst.updateMatrixWorld(true);
       const b = new THREE.Box3().setFromObject(inst);
-      inst.traverse((m: any) => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+      if (p.ground && !b.isEmpty()) {
+        // Stand the model on its base and centre it, whatever origin the file was exported with.
+        const c = b.getCenter(new THREE.Vector3());
+        inst.position.sub(new THREE.Vector3(c.x, b.min.y, c.z));
+        inst.updateMatrixWorld(true);
+        b.setFromObject(inst);
+      }
+      const far = THREE.MathUtils.clamp(b.getSize(new THREE.Vector3()).length() * 120, 160, 6000);
+      const parts: THREE.Box3[] = [];
+      inst.traverse((m: any) => {
+        if (!m.isMesh) return;
+        m.castShadow = true; m.receiveShadow = true;
+        if (!m.isSkinnedMesh) { if (!m.geometry.boundingSphere) m.geometry.computeBoundingSphere(); m.userData.cullDist = far; }
+        if (p.collision === 'parts' && parts.length < 96) { if (!m.geometry.boundingBox) m.geometry.computeBoundingBox(); parts.push(m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld)); }
+      });
       node.remove(ph);
       node.add(inst);
-      if (o.props.solid !== false && !b.isEmpty()) col(node, [b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z]);
+      if (p.solid !== false && p.collision !== 'none' && !b.isEmpty())
+        for (const c of p.collision === 'parts' && parts.length ? parts : [b]) col(node, [c.min.x, c.min.y, c.min.z, c.max.x, c.max.y, c.max.z]);
+      if (src.animations.length && p.animate !== false) {
+        mixer = new THREE.AnimationMixer(inst);
+        mixer.clipAction(src.animations[THREE.MathUtils.clamp(p.clip | 0, 0, src.animations.length - 1)]).play();
+        mixers.add(mixer);
+      }
       ctx.onAsync?.(o.id);
     });
   },
@@ -416,16 +446,30 @@ const BUILDERS: Partial<Record<Obj['kind'], Builder>> = {
   scatter(o, node, ctx) {
     const items: number[] = o.props.items ?? [], n = items.length / 4;
     if (!n) return;
-    const im = new THREE.InstancedMesh(prefabGeometry(o.props.prefab), prefabMaterial(), n);
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), s = new THREE.Vector3(), v = new THREE.Vector3();
+    // Instances are grouped into ground cells so each cell can be frustum- and distance-culled on its own.
+    const CELL = 48, cells = new Map<string, number[]>();
     for (let i = 0; i < n; i++) {
-      const x = items[i * 4], z = items[i * 4 + 1], sc = items[i * 4 + 2];
-      v.set(x, ctx.heightAt(x + o.pos[0], z + o.pos[2]) - o.pos[1], z);
-      im.setMatrixAt(i, m.compose(v, q.setFromAxisAngle(up, items[i * 4 + 3]), s.setScalar(sc)));
+      const k = `${Math.floor(items[i * 4] / CELL)},${Math.floor(items[i * 4 + 1] / CELL)}`;
+      let l = cells.get(k);
+      if (!l) cells.set(k, (l = []));
+      l.push(i);
     }
-    im.instanceMatrix.needsUpdate = true;
-    im.computeBoundingSphere();
-    node.add(im);
+    const def = PREFAB_MAP[o.props.prefab], geo = prefabGeometry(o.props.prefab), r = geo.boundingSphere?.radius ?? 1;
+    const far = def?.small ? 120 : r < 1.3 ? 320 : 1600;
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), s = new THREE.Vector3(), v = new THREE.Vector3();
+    for (const list of cells.values()) {
+      const im = new THREE.InstancedMesh(geo, prefabMaterial(), list.length);
+      list.forEach((i, k) => {
+        const x = items[i * 4], z = items[i * 4 + 1];
+        v.set(x, ctx.heightAt(x + o.pos[0], z + o.pos[2]) - o.pos[1], z);
+        im.setMatrixAt(k, m.compose(v, q.setFromAxisAngle(up, items[i * 4 + 3]), s.setScalar(items[i * 4 + 2])));
+      });
+      im.instanceMatrix.needsUpdate = true;
+      im.computeBoundingSphere();
+      im.userData.cullDist = far;
+      if (def?.small) im.userData.noShadowCast = true;
+      node.add(im);
+    }
   },
   water(o, node) {
     const p = o.props;

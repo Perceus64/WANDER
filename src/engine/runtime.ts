@@ -4,9 +4,10 @@ import * as THREE from 'three';
 import type { Action, AssetProvider, Cinematic, EventRule, Obj, Project, Scene } from './types';
 import { ENV_PRESETS } from './types';
 import type { Core } from './wasm';
+import { cullByDistance } from './cull';
 import { TerrainSystem, type TerrainData } from './terrain';
 import { Environment } from './environment';
-import { buildNode, type BuildCtx, type ColliderDesc } from './build';
+import { buildNode, updateAnimations, type BuildCtx, type ColliderDesc } from './build';
 import { prefabCollider } from './prefabs';
 import { sampleCinematic } from './cinematic';
 import { Hud, el, richText } from './hud';
@@ -74,6 +75,8 @@ export class Runtime {
   private cleanup: (() => void)[] = [];
   private dragLook = false;
   private touchMove = new THREE.Vector2();
+  private frame = 0;
+  private frameMs = 16;
   private ended = false;
 
   constructor(private opts: RuntimeOptions) {
@@ -517,16 +520,31 @@ export class Runtime {
     if (!this.paused) {
       this.time += dt;
       this.updateMachines(dt);
+      updateAnimations(dt);
       for (const c of this.dynamics) this.updateCol(c);
       if (this.cine) this.updateCinematic(dt);
       else { this.updatePlayer(dt); this.placeCamera(dt); }
       this.updateTriggers();
       if (!this.cine) this.updateAim();
     }
+    if (++this.frame % 8 === 0) cullByDistance(this.scene3, this.camera.position);
+    if (!this.paused && this.scene.player.autoQuality !== false) this.tuneQuality(dt);
     this.env.update(this.paused ? 0 : dt, this.camera.position);
     this.terrain?.update(this.camera.position, 3);
     this.env.render(this.renderer, this.scene3, this.camera);
   };
+
+  /** Adaptive resolution: trade sharpness for smoothness on slow devices, and restore it when there is headroom. */
+  private tuneQuality(dt: number) {
+    this.frameMs += (dt * 1000 - this.frameMs) * 0.05;
+    if (this.frame % 90) return;
+    const max = Math.min(devicePixelRatio, 2), fps = 1000 / Math.max(this.frameMs, 1);
+    let pr = this.renderer.getPixelRatio();
+    if (fps < 27 && pr > 0.6) pr = Math.max(0.6, pr - 0.15);
+    else if (fps > 55 && pr < max) pr = Math.min(max, pr + 0.1);
+    else return;
+    this.renderer.setPixelRatio(pr);
+  }
 
   private updatePlayer(dt: number) {
     const P = this.player, S = this.scene.player, K = this.keys;
