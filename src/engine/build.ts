@@ -454,7 +454,9 @@ const BUILDERS: Partial<Record<Obj['kind'], Builder>> = {
     const p = o.props, raw: number[][] = p.points ?? [];
     if (raw.length < 3) return;
     const shape = new THREE.Shape(raw.map(([x, z]) => new THREE.Vector2(x, -z)));
-    const hs = raw.map(([x, z]) => ctx.heightAt(x + o.pos[0], z + o.pos[2]));
+    // `base` (metres above the object's own origin) switches off ground-following: used for parts of assembled buildings.
+    const fixed = typeof p.base === 'number';
+    const hs = raw.map(([x, z]) => (fixed ? 0 : ctx.heightAt(x + o.pos[0], z + o.pos[2])));
     const g: THREE.BufferGeometry = p.height > 0 ? new THREE.ExtrudeGeometry(shape, { depth: p.height + (Math.max(...hs) - Math.min(...hs)), bevelEnabled: false }) : new THREE.ShapeGeometry(shape);
     g.rotateX(-Math.PI / 2);
     const flat = !(p.height > 0);
@@ -462,7 +464,7 @@ const BUILDERS: Partial<Record<Obj['kind'], Builder>> = {
     // Extruded buildings can show a repeating window grid on their walls (one bay per 3.2 m, one storey per 3.5 m).
     const m = new THREE.Mesh(g, !flat && p.windows ? [base0, new THREE.MeshStandardMaterial({ map: facadeTexture(p.color), roughness: 0.85, side: THREE.DoubleSide })] : base0);
     const base = flat ? hs.reduce((a, b) => a + b, 0) / hs.length + 0.06 : Math.min(...hs);
-    m.position.y = base - o.pos[1];
+    m.position.y = fixed ? p.base : base - o.pos[1];
     if (flat) m.userData.noShadowCast = true;
     node.add(m);
     if (!flat && p.solid !== false) {

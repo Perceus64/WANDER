@@ -311,12 +311,12 @@ function buildComputerLab(ed: Editor) {
 
 /**
  * AUST Achrafieh campus sample. Ground elevation is downloaded for the campus location when the
- * world is created; the blocks, parking, lawn and court are traced from the campus block plan.
- * Positions are measured on that plan (about 0.207 m per pixel, taken from the basketball court)
- * and assume the plan is drawn north-up.
+ * world is created. Every block from the campus plan is a real building: a walk-in ground floor
+ * with rooms, doors, windows and furniture, and upper storeys above it. Positions are measured on
+ * the plan (about 0.207 m per pixel, taken from the basketball court) and assume it is drawn north-up.
  */
 async function buildAustCampus(ed: Editor) {
-  const LAT = 33.884, LON = 35.52016, HALF = 170, S = 0.207;
+  const LAT = 33.884, LON = 35.52016, HALF = 170, S = 0.207, H = 3.3;
   const m = (px: number, py: number): [number, number] => [Math.round((px - 345) * S * 100) / 100, Math.round((py - 253) * S * 100) / 100];
   const r2 = (v: number) => Math.round(v * 100) / 100;
 
@@ -327,94 +327,230 @@ async function buildAustCampus(ed: Editor) {
     const plan = geo.planImport([LON - dLon, LAT - dLat, LON + dLon, LAT + dLat], 257), prov = geo.PROVIDERS[0];
     const res = await Promise.race([geo.fetchElevation(ed, plan, prov, () => {}), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 25000))]);
     geo.installGeoTerrain(ed, plan, res.heights, 1, prov);
-    for (let i = 0; i < 3; i++) ed.terrain!.brush(2, 0, 0, HALF * 1.6, 1); // the source data is ~30 m per sample: soften the steps
+    for (let i = 0; i < 4; i++) ed.terrain!.brush(2, 0, 0, HALF * 1.6, 1); // the source data is ~30 m per sample: soften the steps
     real = true;
   } catch {
     ed.createTerrain({ size: 257, cell: 1.33, seed: 7, amplitude: 5, frequency: 0.004, flat: false });
     ed.toast('Elevation for Achrafieh could not be downloaded, so the campus was built on gently sloping placeholder ground. With a connection, use World → Import real place → Replace to load the real elevation; everything stays on the ground.', 'error');
   }
   const T = ed.terrain!, gy = (x: number, z: number) => ed.heightAt(x, z);
-  Object.assign(ed.scene.env, structuredClone(ENV_PRESETS['Sunny afternoon']), { bloom: 0.1, fogDensity: 0.0008 });
+  Object.assign(ed.scene.env, structuredClone(ENV_PRESETS['Sunny afternoon']), { bloom: 0.1, fogDensity: 0.0008, sunElevation: 48, sunAzimuth: 150, ambient: 1.4, sunIntensity: 2.7 });
 
-  // ---- 2. ground surfaces painted onto the terrain
+  // ---- 2. the blocks: plan position, footprint (m), plan rotation, entrance side, storeys, colour, sample use
+  type Use = 'classroom' | 'lab' | 'office' | 'library' | 'cafeteria' | 'lounge' | 'seminar' | 'workshop' | 'security';
+  interface Block { name: string; px: [number, number]; w: number; d: number; rot: number; face: 'S' | 'E' | 'N' | 'W'; floors: number; color: string; lobby: boolean; uses: Use[] }
+  const SAND = '#d9a05b', STONE2 = '#ddd7ca';
+  const BLOCKS: Block[] = [
+    { name: 'Block A', px: [625, 430], w: 13.5, d: 18.6, rot: 6, face: 'N', floors: 5, color: STONE2, lobby: true, uses: ['classroom', 'classroom'] },
+    { name: 'Block B', px: [556, 98], w: 12.5, d: 25, rot: 8, face: 'S', floors: 6, color: STONE2, lobby: true, uses: ['library', 'cafeteria'] },
+    { name: 'Block M', px: [427, 79], w: 9.3, d: 8.7, rot: 0, face: 'S', floors: 3, color: STONE2, lobby: false, uses: ['office'] },
+    { name: 'Block L', px: [485, 157], w: 12.8, d: 12.4, rot: 12, face: 'S', floors: 5, color: SAND, lobby: true, uses: ['lab', 'lab'] },
+    { name: 'Block N', px: [403, 180], w: 14, d: 10.8, rot: 12, face: 'S', floors: 5, color: SAND, lobby: true, uses: ['office', 'office'] },
+    { name: 'Block I', px: [333, 183], w: 10.3, d: 15, rot: 12, face: 'S', floors: 5, color: SAND, lobby: true, uses: ['classroom'] },
+    { name: 'Block H', px: [326, 303], w: 10.8, d: 12, rot: 15, face: 'E', floors: 4, color: STONE2, lobby: false, uses: ['lounge'] },
+    { name: 'Block G', px: [263, 336], w: 9.5, d: 7, rot: 0, face: 'E', floors: 2, color: STONE2, lobby: false, uses: ['seminar'] },
+    { name: 'CCE Workshop', px: [243, 378], w: 18, d: 6, rot: -10, face: 'E', floors: 1, color: '#c9c4b8', lobby: false, uses: ['workshop'] },
+    { name: 'Gatehouse', px: [380, 243], w: 10.5, d: 6, rot: 12, face: 'S', floors: 1, color: '#e3ded2', lobby: false, uses: ['security'] },
+  ];
+  const TURN = { S: 0, E: 90, N: 180, W: -90 };
+  /** World position of a point given in a block's own coordinates (x across the front, z towards the entrance). */
+  const world = (b: Block, x: number, z: number): [number, number] => { const [cx, cz] = m(...b.px), a = ((b.rot + TURN[b.face]) * Math.PI) / 180; return [cx + x * Math.cos(a) + z * Math.sin(a), cz - x * Math.sin(a) + z * Math.cos(a)]; };
+  const dims = (b: Block): [number, number] => (b.face === 'S' || b.face === 'N' ? [b.w, b.d] : [b.d, b.w]);
+
+  // ---- 3. ground: city surface, level pads under every building, the campus yard, lawns
+  T.autoPaint(89, 1e6, -1e6);
+  for (let x = -HALF; x <= HALF; x += 16) for (let z = -HALF; z <= HALF; z += 16) for (let i = 0; i < 3; i++) T.paint(6, x, z, 20, 1);
+  const parkC = m(455, 285);
+  for (let i = 0; i < 4; i++) T.brush(3, parkC[0], parkC[1], 34, 0.6, gy(parkC[0], parkC[1]));
+  const courtC = m(507, 433);
+  for (let pass = 0; pass < 2; pass++) {
+    for (const b of BLOCKS) { const [cx, cz] = m(...b.px), y = gy(...world(b, 0, dims(b)[1] / 2 + 1)); for (let i = 0; i < 12; i++) T.brush(3, cx, cz, Math.hypot(b.w, b.d) * 0.72 + 2, 1, y); }
+    const cy = gy(courtC[0], courtC[1]);
+    for (let i = 0; i < 8; i++) T.brush(3, courtC[0], courtC[1], 21, 1, cy);
+  }
+  const courtY = gy(courtC[0], courtC[1]);
   const inside = (pts: [number, number][], x: number, z: number) => { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const [xi, zi] = pts[i], [xj, zj] = pts[j]; if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) c = !c; } return c; };
   const yard = ([[262, 288], [300, 230], [305, 140], [345, 135], [400, 118], [400, 55], [455, 50], [500, 32], [560, 26], [600, 60], [645, 150], [668, 240], [662, 330], [668, 470], [600, 482], [435, 472], [435, 345], [300, 398], [190, 392], [188, 335], [262, 326]] as [number, number][]).map(([a, b]) => m(a, b));
-  const courtC = m(507, 433), courtY = gy(courtC[0], courtC[1]);
-  for (let i = 0; i < 6; i++) T.brush(3, courtC[0], courtC[1], 19, 1, courtY);
-  for (let x = -34; x <= 70; x += 2.5) for (let z = -50; z <= 50; z += 2.5) if (inside(yard, x, z)) for (let i = 0; i < 3; i++) T.paint(7, x, z, 3, 1);
-  const grass = (px: number, py: number, rad: number) => { const [x, z] = m(px, py); for (let i = 0; i < 5; i++) T.paint(0, x, z, rad, 1); };
+  for (let x = -34; x <= 70; x += 2.5) for (let z = -50; z <= 50; z += 2.5) if (inside(yard, x, z)) for (let i = 0; i < 4; i++) T.paint(7, x, z, 3, 1);
+  const grass = (px: number, py: number, rad: number) => { const [x, z] = m(px, py); for (let i = 0; i < 6; i++) T.paint(0, x, z, rad, 1); };
   for (let a = 0; a < 6.28; a += 0.5) grass(577 + Math.cos(a) * 26, 255 + Math.sin(a) * 18, 4.2);
   grass(577, 255, 6);
   ([[612, 118], [632, 140], [650, 168], [664, 200], [672, 235], [674, 270], [668, 300], [650, 322], [618, 334], [585, 342], [556, 350]] as [number, number][]).forEach(([a, b]) => grass(a, b, 4.2));
   grass(272, 292, 2.2);
 
-  // ---- 3. the blocks, traced from the plan (heights are placeholders: set the real number of storeys in the Inspector)
   const campus = ed.spawn('group', 'AUST Achrafieh campus', { folder: true }, [0, 0, 0]);
-  const blocks = ed.spawn('group', 'Blocks', { folder: true }, [0, 0, 0], campus.id), labels = ed.spawn('group', 'Signs and information', { folder: true }, [0, 0, 0], campus.id);
-  const BLOCKS: [string, number, string, [number, number][], [number, number]][] = [
-    ['Block A', 17.5, '#d8d2c4', [[585, 388], [648, 380], [668, 468], [628, 478], [585, 440]], [572, 420]],
-    ['Block B', 21, '#d8d2c4', [[500, 38], [545, 30], [570, 45], [590, 95], [585, 140], [560, 170], [530, 162], [515, 122]], [545, 185]],
-    ['Block M', 10.5, '#d8d2c4', [[405, 58], [450, 58], [450, 100], [405, 100]], [428, 112]],
-    ['Block L', 17.5, '#d9a05b', [[455, 130], [505, 120], [520, 165], [500, 185], [465, 192], [448, 160]], [488, 204]],
-    ['Block N', 17.5, '#d9a05b', [[368, 160], [425, 148], [442, 185], [430, 205], [385, 210], [365, 190]], [408, 222]],
-    ['Block I', 17.5, '#d9a05b', [[310, 150], [345, 143], [362, 200], [350, 222], [318, 215], [303, 180]], [338, 236]],
-    ['Block H', 14, '#d8d2c4', [[300, 280], [345, 268], [358, 318], [318, 338], [296, 318]], [372, 300]],
-    ['Block G', 7, '#d8d2c4', [[238, 322], [275, 318], [290, 345], [280, 362], [240, 362]], [300, 352]],
-    ['CCE Workshop', 5, '#c9c4b8', [[192, 340], [236, 346], [236, 364], [298, 374], [292, 392], [205, 388], [190, 365]], [262, 402]],
-    ['Small building (unlabelled on the plan)', 4, '#e3ded2', [[352, 234], [400, 224], [407, 252], [360, 262]], [380, 272]],
-  ];
-  for (const [name, height, color, px, sign] of BLOCKS) {
-    const pts = px.map(([a, b]) => m(a, b)), cx = pts.reduce((n, q) => n + q[0], 0) / pts.length, cz = pts.reduce((n, q) => n + q[1], 0) / pts.length;
-    ed.spawn('poly', name, { points: pts.map(([x, z]) => [r2(x - cx), r2(z - cz)]), height, color, opacity: 1, windows: height > 6 }, [r2(cx), 0, r2(cz)], blocks.id);
-    const [sx, sz] = m(sign[0], sign[1]), y = gy(sx, sz), short = name.replace(/ \(.*/, '');
-    ed.spawn('text', `${short} sign`, { text: short.toUpperCase(), width: Math.max(2.2, short.length * 0.3), height: 0.55, color: '#ffffff', background: '#123a6b' }, [sx, r2(y + 1.9), sz], labels.id, { rot: [0, Math.atan2(sx - cx, sz - cz) * 57.3, 0] });
-    ed.spawn('primitive', `${short} sign post`, { shape: 'cylinder', color: '#55606c', solid: false }, [sx, r2(y + 0.95), sz], labels.id, { scale: [0.08, 1.9, 0.08] });
-    if (!name.startsWith('Small')) info(ed, short, `**${short}**, traced from the campus block plan.\n\nReplace this text with the departments, labs and offices in this block. The building height is a placeholder – set it in the Inspector.`, [sx, r2(y + 1.5), sz + 0.4], { distance: 4, template: 'education' }, labels.id);
+  const blocks = ed.spawn('group', 'Blocks', { folder: true }, [0, 0, 0], campus.id);
+
+  // ---- 4. furniture sets for the sample interiors (areas are given in a block's own coordinates)
+  type Put = (key: string, x: number, z: number, rot?: number, y?: number, name?: string) => Obj;
+  const FIT: Record<Use, (at: Put, x0: number, x1: number, z0: number, z1: number) => void> = {
+    classroom(at, x0, x1, z0, z1) {
+      const cx = (x0 + x1) / 2;
+      at('blackboard', cx, z0 + 0.12); at('table', cx, z0 + 1.5, 0, undefined, 'Lecturer’s table'); at('chair', cx, z0 + 0.9, 180);
+      for (let z = z0 + 3.2; z < z1 - 1.3; z += 1.7) for (let x = x0 + 1; x < x1 - 0.6; x += 1.4) at('school_desk', x, z);
+      at('waste_bin', x1 - 0.5, z0 + 0.5);
+    },
+    lab(at, x0, x1, z0, z1) {
+      at('whiteboard', (x0 + x1) / 2, z0 + 0.1); at('server_rack', x1 - 0.55, z0 + 0.7, -90);
+      for (let z = z0 + 2.4; z < z1 - 1.5; z += 2.2) for (let x = x0 + 1.1; x < x1 - 0.9; x += 1.9) at('workstation', x, z);
+    },
+    office(at, x0, x1, z0, z1) {
+      const cx = (x0 + x1) / 2;
+      at('desk_exec', cx, z0 + 1.7, 180); at('office_chair', cx, z0 + 0.8, 0); at('laptop', cx, z0 + 1.7, 0, 0.84); at('visitor_chair', cx - 0.6, z0 + 2.9, 180); at('visitor_chair', cx + 0.6, z0 + 2.9, 180);
+      at('bookcase_office', x0 + 0.3, z0 + 1.2, 90); at('filing_cabinet', x1 - 0.4, z0 + 0.6, -90); at('potted_plant', x1 - 0.5, z1 - 0.6);
+    },
+    library(at, x0, x1, z0, z1) {
+      for (let z = z0 + 1.2; z < (z0 + z1) / 2; z += 2.2) for (let x = x0 + 1; x < x1 - 0.6; x += 1.3) { at('bookshelf', x, z); at('bookshelf', x, z + 0.4, 180); }
+      for (let z = (z0 + z1) / 2 + 1.5; z < z1 - 1.5; z += 3) { const cx = (x0 + x1) / 2; at('table', cx, z); at('chair', cx - 0.4, z + 0.75, 180); at('chair', cx + 0.4, z + 0.75, 180); at('chair', cx - 0.4, z - 0.75); at('chair', cx + 0.4, z - 0.75); at('desk_lamp', cx, z, 0, 0.83); }
+    },
+    cafeteria(at, x0, x1, z0, z1) {
+      const cx = (x0 + x1) / 2;
+      at('kitchen_counter', cx - 1.1, z0 + 0.45); at('kitchen_counter', cx + 1, z0 + 0.45); at('fridge', x1 - 0.55, z0 + 0.5); at('coffee_machine', cx + 1.2, z0 + 0.45, 0, 0.96);
+      for (let z = z0 + 3.4; z < z1 - 1.4; z += 3) { at('table', cx, z); at('chair', cx - 0.4, z + 0.75, 180); at('chair', cx + 0.4, z + 0.75, 180); at('chair', cx - 0.4, z - 0.75); at('chair', cx + 0.4, z - 0.75); }
+      at('waste_bin', x0 + 0.5, z0 + 0.5); at('water_cooler', x0 + 0.45, z0 + 1.4, 90);
+    },
+    lounge(at, x0, x1, z0, z1) {
+      const cx = (x0 + x1) / 2;
+      at('sofa', cx - 2.2, z0 + 0.8); at('sofa', cx + 2.2, z0 + 0.8); at('rug', cx, z0 + 2.4, 0, 0.06); at('table', cx, z0 + 2.4, 0, undefined, 'Coffee table'); at('tv', x0 + 0.4, (z0 + z1) / 2, 90);
+      at('kitchen_counter', x1 - 0.5, z1 - 2.4, -90); at('coffee_machine', x1 - 0.5, z1 - 2.4, -90, 0.96); at('water_cooler', x1 - 0.45, z1 - 4, -90);
+      for (const dx of [-2.6, 2.6]) { at('table', cx + dx, z1 - 2.6, 90); at('chair', cx + dx - 0.75, z1 - 2.6, 90); at('chair', cx + dx + 0.75, z1 - 2.6, -90); }
+      at('potted_plant', x0 + 0.5, z0 + 0.5); at('notice_board', cx, z0 + 0.1, 0, 0.3);
+    },
+    seminar(at, x0, x1, z0, _z1) {
+      const cx = (x0 + x1) / 2, cz = z0 + 4;
+      at('projector_screen', cx, z0 + 0.5); at('meeting_table', cx, cz, 90);
+      for (const dz of [-1.1, 0, 1.1]) { at('office_chair', cx - 1.05, cz + dz, 90); at('office_chair', cx + 1.05, cz + dz, -90); }
+      at('whiteboard', x0 + 0.1, cz, 90); at('potted_plant', x1 - 0.5, z0 + 0.5);
+    },
+    workshop(at, x0, x1, z0, z1) {
+      at('generator', x0 + 1.3, z0 + 1); at('control_panel', x1 - 0.6, z0 + 1.2, -90); at('lever', x1 - 0.5, z0 + 2.4); at('pipe', (x0 + x1) / 2, z0 + 0.3);
+      for (let z = z0 + 4; z < z1 - 5; z += 3.2) { at('table', x0 + 0.8, z, 90, undefined, 'Workbench'); at('crate', x1 - 0.8, z, 15); at('barrel', x1 - 0.7, z + 1.2); }
+      at('crate', x1 - 0.8, z0 + 4, 20, 1.05, 'Stacked crate'); at('lockers', x0 + 0.3, z1 - 4, 90);
+    },
+    security(at, x0, x1, z0, _z1) {
+      const cx = (x0 + x1) / 2;
+      at('office_desk', cx - 2, z0 + 1.5, 180); at('office_chair', cx - 2.1, z0 + 0.7); at('monitor_dual', cx - 2.1, z0 + 1.55, 0, 0.81); at('desk_phone', cx - 1.5, z0 + 1.7, 0, 0.81);
+      at('lockers', x1 - 0.8, z0 + 0.3); at('filing_cabinet', x0 + 0.4, z0 + 0.5, 90); at('water_cooler', x1 - 2, z0 + 0.4); at('visitor_chair', cx + 1.5, z0 + 0.6);
+    },
+  };
+  const LABEL: Record<Use, string> = { classroom: 'Classroom', lab: 'Computer lab', office: 'Office', library: 'Library', cafeteria: 'Cafeteria', lounge: 'Student lounge', seminar: 'Seminar room', workshop: 'Workshop', security: 'Security' };
+
+  // ---- 5. build every block: level plinth, walk-in ground floor with rooms, upper storeys, entrance
+  const labels = ed.spawn('group', 'Information points', { folder: true }, [0, 0, 0], campus.id);
+  const entrances: Record<string, [number, number]> = {};
+  for (const b of BLOCKS) {
+    const [W, D] = dims(b), [cx, cz] = m(...b.px), t = 0.2;
+    let y0 = -Infinity;
+    for (const [fx, fz] of [[0, 0], [-1, -1], [1, -1], [-1, 1], [1, 1], [0, 1], [0, -1], [1, 0], [-1, 0]]) y0 = Math.max(y0, gy(...world(b, (fx * W) / 2, (fz * D) / 2)));
+    y0 = r2(y0 + 0.08);
+    const { g, walls } = room(ed, b.name, cx, y0, cz, W, D, H, { color: '#ebe6da', floorColor: b.uses[0] === 'workshop' ? '#7d7d7a' : '#b9b3a6', parent: blocks.id });
+    g.rot = [0, b.rot + TURN[b.face], 0];
+    ed.afterTransform(g.id);
+    const at: Put = (key, x, z, rot = 0, y = 0.05, name) => prefab(ed, key, r2(x), r2(z), rot, g.id, y, name);
+    ed.spawn('primitive', 'Plinth', { shape: 'box', color: '#8f8a80', solid: false }, [0, -0.8, 0], g.id, { scale: [W + 0.5, 1.6, D + 0.5] });
+    // entrance and ground-floor windows
+    const wide = b.uses[0] === 'workshop', big = W >= 10 && !wide;
+    opening(ed, walls.south, 'door', W / 2 + t / 2, wide ? { style: 'garage', width: 2.8, height: 2.5, color: '#8d949c' } : big ? { style: 'sliding', auto: true, width: 1.7, color: '#35485c' } : { color: '#4a3424' });
+    if (W >= 9 && !wide) { opening(ed, walls.south, 'window', W * 0.2, { width: 1.5, height: 1.4 }); opening(ed, walls.south, 'window', W * 0.8 + t, { width: 1.5, height: 1.4 }); }
+    const zp = b.lobby ? r2(D / 2 - Math.min(4.6, D * 0.36)) : D / 2;
+    for (const side of [walls.west, walls.east]) for (let a = 2.2; a < D - 2.4; a += 4.2) if (Math.abs(a + t / 2 - D / 2 - zp) > 1.3) opening(ed, side, 'window', r2(a), { width: 1.6, height: 1.4 });
+    for (let a = 2.4; a < W - 1.8; a += 4.2) opening(ed, walls.north, 'window', r2(a), { width: 1.6, height: 1.4 });
+    // canopy, name sign, upper storeys, roof
+    ed.spawn('floor', 'Entrance canopy', { width: wide ? 3.6 : 3.2, depth: 1.6, thickness: 0.14, color: '#3d4b5c' }, [0, 2.75, D / 2 + 0.9], g.id);
+    for (const sx of [-1, 1]) ed.spawn('primitive', 'Canopy post', { shape: 'cylinder', color: '#55606c', solid: false }, [sx * (wide ? 1.65 : 1.45), 1.34, D / 2 + 1.55], g.id, { scale: [0.1, 2.68, 0.1] });
+    ed.spawn('text', `${b.name} sign`, { text: b.name.toUpperCase(), width: Math.max(2.4, b.name.length * 0.3), height: 0.5, color: '#ffffff', background: '#123a6b' }, [0, 2.86, D / 2 + 1.72], g.id);
+    const top = H + 0.2 + (b.floors - 1) * 3.5;
+    if (b.floors > 1) ed.spawn('poly', 'Upper storeys', { points: [[-W / 2 - 0.1, -D / 2 - 0.1], [W / 2 + 0.1, -D / 2 - 0.1], [W / 2 + 0.1, D / 2 + 0.1], [-W / 2 - 0.1, D / 2 + 0.1]], height: (b.floors - 1) * 3.5, color: b.color, opacity: 1, windows: true, base: H + 0.2, solid: false }, [0, 0, 0], g.id);
+    ed.spawn('floor', 'String course', { width: W + 0.5, depth: D + 0.5, thickness: 0.22, color: b.color === STONE2 ? '#8f8a80' : '#b9772f' }, [0, r2(H + 0.42), 0], g.id);
+    ed.spawn('floor', 'Roof edge', { width: W + 0.7, depth: D + 0.7, thickness: 0.35, color: '#8f8a80' }, [0, r2(top + 0.35), 0], g.id);
+    ed.spawn('primitive', 'Roof plant', { shape: 'box', color: '#9aa0a6', solid: false }, [r2(-W / 4), r2(top + 0.95), r2(-D / 4)], g.id, { scale: [1.8, 1.2, 1.4] });
+    // rooms
+    if (b.lobby) {
+      const split = b.uses.length > 1, part = ed.spawn('wall', 'Lobby wall', { length: W - t, height: H, thickness: 0.12, color: '#f1efe9' }, [-W / 2 + t / 2, 0, zp], g.id);
+      if (split) {
+        opening(ed, part, 'door', r2(W * 0.25), {}); opening(ed, part, 'door', r2(W * 0.75 - t), {});
+        ed.spawn('wall', 'Dividing wall', { length: r2(zp + D / 2 - t / 2), height: H, thickness: 0.12, color: '#f1efe9' }, [0, 0, -D / 2 + t / 2], g.id, { rot: [0, -90, 0] });
+        FIT[b.uses[0]](at, -W / 2 + t, -0.1, -D / 2 + t, zp - 0.1); FIT[b.uses[1]](at, 0.1, W / 2 - t, -D / 2 + t, zp - 0.1);
+        b.uses.forEach((u, i) => ed.spawn('text', `${LABEL[u]} sign`, { text: LABEL[u].toUpperCase(), width: 1.5, height: 0.26, color: '#ffffff', background: '#123a6b' }, [r2((i ? 1 : -1) * W * 0.25 - (i ? t / 2 : -t / 2)), 2.3, zp + 0.08], g.id));
+      } else {
+        opening(ed, part, 'door', r2(W / 2 - t / 2), {});
+        FIT[b.uses[0]](at, -W / 2 + t, W / 2 - t, -D / 2 + t, zp - 0.1);
+        ed.spawn('text', `${LABEL[b.uses[0]]} sign`, { text: LABEL[b.uses[0]].toUpperCase(), width: 1.5, height: 0.26, color: '#ffffff', background: '#123a6b' }, [0, 2.3, zp + 0.08], g.id);
+      }
+      // lobby furniture
+      at('reception_desk', -W / 2 + 1.9, zp + 1.3, 90); at('office_chair', -W / 2 + 1.1, zp + 1.3, 90); at('sofa', W / 2 - 0.7, zp + 1.6, -90); at('potted_plant', W / 2 - 0.6, D / 2 - 0.6); at('potted_plant', -W / 2 + 0.6, D / 2 - 0.6); at('notice_board', W / 2 - 0.12, zp + 3.3, -90, 0.2);
+      at('ceiling_light', 0, (zp + D / 2) / 2, 0, H, 'Lobby light');
+    } else {
+      FIT[b.uses[0]](at, -W / 2 + t, W / 2 - t, -D / 2 + t, D / 2 - t);
+      const lamp = at('ceiling_light', 0, 0, 0, H, 'Ceiling light');
+      if (b.uses[0] !== 'lounge' && b.uses[0] !== 'seminar') ed.setProps(lamp.id, { lightOn: false });
+    }
+    const [ex, ez] = world(b, 0, D / 2 + 2.6);
+    entrances[b.name] = [ex, ez];
+    const uses = b.uses.length > 1 && b.uses[0] === b.uses[1] ? `two ${LABEL[b.uses[0]].toLowerCase()}s` : b.uses.map((u) => `a ${LABEL[u].toLowerCase()}`).join(' and ');
+    info(ed, b.name, `**${b.name}** – ${b.floors} storey${b.floors > 1 ? 's' : ''} in this sample.\n\nThe ground floor is fitted out as a sample: ${b.lobby ? 'a lobby with ' : ''}${uses}. Replace the rooms and this text with the real departments, labs and offices; the number of storeys is a placeholder too.`, [r2(ex), r2(gy(ex, ez) + 1.5), r2(ez)], { distance: 3.2, template: 'education' }, labels.id);
   }
 
-  // ---- 4. parking, lawn, palms, garden and the basketball court
+  // ---- 6. grounds: parking bays, palms, lawn trees, garden, basketball court, campus gate
   const land = ed.spawn('group', 'Grounds', { folder: true }, [0, 0, 0], campus.id);
   const put = (key: string, px: number, py: number, rot = 0, name?: string) => { const [x, z] = m(px, py); return prefab(ed, key, x, z, rot, land.id, gy(x, z), name); };
-  ([[447, 210], [468, 200], [490, 191], [514, 182]] as [number, number][]).forEach(([a, b], i) => put('tree_palm', a, b, i * 50, `Palm ${i + 1}`));
-  put('potted_plant', 427, 220);
+  ([[440, 238], [462, 232], [506, 222], [528, 217]] as [number, number][]).forEach(([a, b], i) => put('tree_palm', a, b, i * 50, `Palm ${i + 1}`));
   ([[468, 352], [482, 366], [496, 354], [476, 378], [548, 340], [562, 350], [575, 338]] as [number, number][]).forEach(([a, b]) => put('bush', a, b));
   ([[625, 130], [655, 185], [672, 250], [660, 312]] as [number, number][]).forEach(([a, b], i) => put('tree_oak', a, b, i * 70));
-  put('tree_oak', 560, 250, 20); put('tree_oak', 598, 262, 140); put('bench', 577, 300, 180); put('bench', 540, 215, 0); put('street_lamp', 520, 300, 90); put('street_lamp', 420, 300, -90); put('trash_bin', 590, 300);
-  ([[412, 278], [428, 276], [444, 274], [476, 300], [492, 298]] as [number, number][]).forEach(([a, b], i) => put('car', a, b, i < 3 ? 8 : 100, `Parked car ${i + 1}`));
-  ed.spawn('text', 'Parking sign', { text: 'PARKING', width: 2.4, height: 0.6, color: '#ffffff', background: '#1d5fa8' }, [m(456, 240)[0], r2(gy(...m(456, 240)) + 2), m(456, 240)[1]], labels.id);
+  put('tree_oak', 560, 250, 20); put('tree_oak', 598, 262, 140); put('bench', 577, 300, 180); put('bench', 540, 215, 0); put('bench', 600, 232, -60); put('trash_bin', 590, 300); put('trash_bin', 425, 262); put('bicycle', 372, 268, 30); put('bicycle', 378, 270, 30, 'Bicycle 2');
+  put('street_lamp', 520, 305, 90); ed.setProps(put('street_lamp', 420, 312, -90).id, { lightOn: false }); ed.setProps(put('street_lamp', 600, 345, 180).id, { lightOn: false });
+  const bays = ed.spawn('group', 'Parking bays', { folder: true }, [0, 0, 0], land.id);
+  const bay = (px: number, py: number, rot: number) => { const [x, z] = m(px, py); ed.spawn('primitive', 'Bay line', { shape: 'plane', color: '#f4f4f0', solid: false, roughness: 0.9 }, [x, r2(gy(x, z) + 0.035), z], bays.id, { rot: [0, rot, 0], scale: [0.12, 1, 4.8] }); };
+  for (let i = 0; i <= 8; i++) { bay(404 + i * 12.6, 286 - i * 1.2, 6); if (i < 7) bay(430 + i * 12.6, 330 - i * 0.6, 3); }
+  ([[410, 286, 6, '#b5403a'], [435.5, 283.5, 6, '#3f6ea4'], [461, 281, 6, '#e3e3df'], [486, 279, 186, '#2a2e35'], [436, 330, 183, '#8a8f96'], [474, 328, 3, '#b5803a']] as [number, number, number, string][]).forEach(([a, b, rot, color], i) => { const c = put('car', a, b, rot, `Parked car ${i + 1}`); if (i % 2) ed.setProps(c.id, { color: ['#ffffff', '#c9d6ff', '#fff0c0'][(i >> 1) % 3] }); void color; });
   const court = ed.addAsset(pngFile('Basketball court.png', 560, 300, (g) => {
-    g.fillStyle = '#b9bcc0'; g.fillRect(0, 0, 560, 300);
+    g.fillStyle = '#2f6f9a'; g.fillRect(0, 0, 560, 300); g.fillStyle = '#c96a3a'; g.fillRect(12, 12, 536, 276);
     g.strokeStyle = '#ffffff'; g.lineWidth = 5; g.strokeRect(12, 12, 536, 276);
     g.beginPath(); g.moveTo(280, 12); g.lineTo(280, 288); g.stroke(); g.beginPath(); g.arc(280, 150, 38, 0, 6.3); g.stroke();
-    for (const sx of [12, 548]) { const d = sx === 12 ? 1 : -1; g.strokeRect(sx, 102, 112 * d, 96); g.beginPath(); g.arc(sx + 112 * d, 150, 38, 0, 6.3); g.stroke(); g.beginPath(); g.arc(sx + 30 * d, 150, 132, -1.25, 1.25, d < 0); g.stroke(); }
+    for (const sx of [12, 548]) { const d = sx === 12 ? 1 : -1; g.fillStyle = '#2f6f9a'; g.fillRect(Math.min(sx, sx + 112 * d), 102, 112, 96); g.strokeRect(sx, 102, 112 * d, 96); g.beginPath(); g.arc(sx + 112 * d, 150, 38, 0, 6.3); g.stroke(); g.beginPath(); g.arc(sx + 30 * d, 150, 132, -1.25, 1.25, d < 0); g.stroke(); }
   }), 'image');
-  ed.spawn('primitive', 'Basketball court', { shape: 'plane', color: '#ffffff', texture: court, roughness: 0.9 }, [courtC[0], r2(courtY + 0.04), courtC[1]], land.id, { scale: [30, 1, 16] });
+  ed.spawn('primitive', 'Basketball court', { shape: 'plane', color: '#ffffff', texture: court, roughness: 0.9 }, [courtC[0], r2(courtY + 0.05), courtC[1]], land.id, { scale: [30, 1, 16] });
   for (const sx of [-1, 1]) {
     ed.spawn('primitive', 'Hoop post', { shape: 'cylinder', color: '#2a2e35' }, [r2(courtC[0] + sx * 15.4), r2(courtY + 1.6), courtC[1]], land.id, { scale: [0.16, 3.2, 0.16] });
     ed.spawn('primitive', 'Backboard', { shape: 'box', color: '#f2f2f0', solid: false }, [r2(courtC[0] + sx * 14.5), r2(courtY + 3.2), courtC[1]], land.id, { scale: [0.08, 1.05, 1.8] });
     ed.spawn('primitive', 'Hoop arm', { shape: 'box', color: '#2a2e35', solid: false }, [r2(courtC[0] + sx * 14.95), r2(courtY + 3.1), courtC[1]], land.id, { scale: [0.9, 0.08, 0.08] });
     ed.spawn('primitive', 'Hoop', { shape: 'cylinder', color: '#e8642a', solid: false }, [r2(courtC[0] + sx * 14.15), r2(courtY + 3.0), courtC[1]], land.id, { scale: [0.46, 0.04, 0.46] });
   }
+  const [gx, gz] = m(338, 124), gY = gy(gx, gz), gate = ed.spawn('group', 'Campus gate', {}, [gx, r2(gY), gz], land.id, { rot: [0, 8, 0] });
+  for (const sx of [-1, 1]) ed.spawn('primitive', 'Gate pillar', { shape: 'box', color: '#ddd7ca' }, [sx * 3.3, 1.9, 0], gate.id, { scale: [0.8, 3.8, 0.8] });
+  ed.spawn('primitive', 'Gate beam', { shape: 'box', color: '#123a6b', solid: false }, [0, 4.15, 0], gate.id, { scale: [8.2, 0.9, 0.6] });
+  ed.spawn('text', 'Gate sign', { text: 'AMERICAN UNIVERSITY OF SCIENCE & TECHNOLOGY', width: 7.6, height: 0.5, color: '#ffffff', background: '#123a6b' }, [0, 3.9, 0.32], gate.id);
+  ed.spawn('text', 'Gate sign (street side)', { text: 'AUST · ACHRAFIEH CAMPUS', width: 5.6, height: 0.5, color: '#ffffff', background: '#123a6b' }, [0, 3.9, -0.32], gate.id, { rot: [0, 180, 0] });
 
-  // ---- 5. surrounding streets, approximated from the grey bands on the plan
-  const street = (name: string, px: [number, number][], width: number) => { const pts = px.map(([a, b]) => m(a, b)); ed.spawn('road', name, { points: pts.map(([x, z]) => [r2(x - pts[0][0]), r2(z - pts[0][1])]), width, sidewalks: false }, [pts[0][0], 0, pts[0][1]], land.id); };
-  street('Street (north)', [[0, 228], [110, 172], [215, 98], [330, 58], [460, 22], [560, 0]], 7);
-  street('Street (west)', [[18, 0], [18, 500]], 7);
-  street('Street (north-west)', [[215, 0], [215, 98]], 6);
-  street('Campus entrance drive', [[330, 62], [340, 128], [372, 236], [430, 268]], 4.5);
+  // ---- 7. the neighbourhood: streets from the plan and simple neighbouring buildings for context
+  const street = (name: string, px: [number, number][], width: number, sidewalks = true) => { const pts = px.map(([a, b]) => m(a, b)); ed.spawn('road', name, { points: pts.map(([x, z]) => [r2(x - pts[0][0]), r2(z - pts[0][1])]), width, sidewalks }, [pts[0][0], 0, pts[0][1]], land.id); };
+  street('Street (north)', [[-140, 300], [0, 228], [110, 172], [215, 98], [330, 58], [460, 22], [560, 0], [700, -40]], 7);
+  street('Street (west)', [[18, -200], [18, 700]], 7);
+  street('Street (north-west)', [[215, -200], [215, 98]], 6);
+  street('Campus entrance drive', [[330, 62], [340, 128], [372, 222]], 4.5, false);
+  const city = ed.spawn('group', 'Neighbouring buildings (approximate)', { folder: true }, [0, 0, 0]);
+  const rnd2 = rnd(77);
+  ([[35, 30, 130, 120], [240, -30, 320, 40], [150, 170, 290, 232], [35, 240, 125, 276], [140, 246, 250, 292], [310, 412, 420, 478], [350, -60, 440, 10], [470, -70, 560, -18], [60, 130, 110, 160], [-120, 320, -10, 420], [-110, 60, -20, 180], [40, 520, 170, 600], [230, 520, 420, 590], [470, 520, 640, 600], [720, 60, 800, 200], [720, 260, 810, 420], [600, -80, 700, -50]] as number[][]).forEach(([a, b, c, d], i) => {
+    const [x0, z0] = m(a, b), [x1, z1] = m(c, d), cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, hw = (x1 - x0) / 2, hd = (z1 - z0) / 2;
+    ed.spawn('poly', `Neighbouring building ${i + 1}`, { points: [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([x, z]) => [r2(x), r2(z)]), height: 10.5 + Math.floor(rnd2() * 5) * 3.5, color: ['#cfc9bd', '#c4c0b6', '#d6cfc0', '#bfc3c6'][i % 4], opacity: 1, windows: true }, [r2(cx), 0, r2(cz)], city.id);
+  });
 
-  // ---- 6. visitor start, a campus tour and guidance
-  const [sx, sz] = m(455, 300);
+  // ---- 8. visitor start, campus flyover and a short tour
+  const [sx, sz] = m(455, 306);
   spawnAt(ed, sx, sz, 0);
-  const board = put('info_board', 440, 318, 160, 'Campus map board');
+  const board = put('info_board', 440, 322, 160, 'Campus map board');
   board.props.interactable = true; board.props.prompt = 'Start the campus flyover';
   const top = (px: number, py: number, up: number): Vec3 => { const [x, z] = m(px, py); return [x, r2(gy(x, z) + up), z]; };
-  const tour = cinematic(ed, 'Campus flyover', 18, [camKey(0, top(455, 320, 3), top(455, 200, 6)), camKey(5, top(600, 420, 38), top(470, 250, 0), 60), camKey(10, top(330, 60, 34), top(430, 240, 0), 60), camKey(14, top(230, 420, 30), top(400, 250, 2), 58), camKey(18, top(455, 330, 2.2), top(455, 200, 6), 50)],
-    { title: 'AUST · ACHRAFIEH', subtitles: [{ t: 1.5, d: 3.5, text: 'Blocks I, N and L line the north side of the parking.' }, { t: 6, d: 3.5, text: 'Block B and Block A stand on the east side, beside the lawn and the court.' }, { t: 11, d: 4, text: 'Blocks H and G and the CCE Workshop are to the south-west.' }] });
-  rule(ed, 'Welcome', { type: 'start' }, [{ type: 'objective', text: 'Explore the campus' }, { type: 'message', text: real ? 'The ground follows real elevation data for Achrafieh. Walk up to a sign to read about a block.' : 'Walk up to a sign to read about a block.', seconds: 7 }, { type: 'wait', seconds: 7 }, { type: 'message', text: 'Use the map board beside you for a flyover of the campus.', seconds: 6 }]);
+  const tour = cinematic(ed, 'Campus flyover', 20, [camKey(0, top(455, 325, 3), top(455, 200, 8)), camKey(5, top(640, 440, 42), top(470, 250, 4), 60), camKey(10, top(330, 30, 40), top(440, 250, 4), 60), camKey(15, top(200, 440, 34), top(400, 250, 6), 58), camKey(20, top(455, 335, 2.2), top(455, 200, 8), 50)],
+    { title: 'AUST · ACHRAFIEH', subtitles: [{ t: 1.5, d: 3.5, text: 'Blocks I, N and L line the north side of the parking.' }, { t: 6, d: 3.5, text: 'Block B and Block A stand on the east side, beside the lawn and the court.' }, { t: 11, d: 4, text: 'Blocks H and G and the CCE Workshop are to the south-west.' }, { t: 16, d: 3.5, text: 'Every block can be entered. Walk up to a door.' }] });
+  rule(ed, 'Welcome', { type: 'start' }, [{ type: 'objective', text: 'Visit Block L, Block B and Block A' }, { type: 'message', text: real ? 'The ground follows real elevation data for Achrafieh. Every block can be entered.' : 'Every block can be entered – walk up to a door.', seconds: 7 }, { type: 'wait', seconds: 7 }, { type: 'message', text: 'Use the map board beside you for a flyover of the campus. F3 shows performance.', seconds: 6 }]);
   rule(ed, 'Flyover from the map board', { type: 'interact', target: board.id }, [{ type: 'cinematic', id: tour.id }], false);
-  rule(ed, 'After the flyover', { type: 'cinematicEnd', target: tour.id }, [{ type: 'objective', text: '' }], false);
-  ed.project.description = 'AUST Achrafieh campus sample: blocks traced from the campus plan on real-world elevation.';
+  for (const name of ['Block L', 'Block B', 'Block A']) {
+    const [zx, zz] = entrances[name], zone = ed.spawn('trigger', `${name} entrance zone`, { size: [5, 3, 5] }, [r2(zx), r2(gy(zx, zz)), r2(zz)], labels.id);
+    rule(ed, `Visited ${name}`, { type: 'enterZone', target: zone.id }, [{ type: 'setVar', name: 'visited', op: 'add', value: 1 }, { type: 'message', text: `${name} visited.`, seconds: 3 }]);
+  }
+  rule(ed, 'Tour complete', { type: 'variable', name: 'visited' }, [{ type: 'objective', text: '' }, { type: 'dialogue', speaker: 'Guide', text: 'That is the campus tour. Stop the preview to edit any building, room or sign.', seconds: 8 }], true, [{ name: 'visited', op: '>=', value: 3 }]);
+  ed.project.description = 'AUST Achrafieh campus sample: every block from the campus plan as a walk-in building, on real-world elevation.';
   T.markAllDirty();
   ed.terrainChanged();
   ed.viewport?.frameAll();
