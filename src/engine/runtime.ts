@@ -5,10 +5,11 @@ import type { Action, AssetProvider, Cinematic, EventRule, Obj, Project, Scene }
 import { ENV_PRESETS } from './types';
 import type { Core } from './wasm';
 import { cullByDistance } from './cull';
+import { OcclusionCuller } from './occlusion';
 import { TerrainSystem, type TerrainData } from './terrain';
 import { Environment } from './environment';
 import { buildNode, updateAnimations, type BuildCtx, type ColliderDesc } from './build';
-import { prefabCollider } from './prefabs';
+import { PREFAB_MAP, prefabCollider } from './prefabs';
 import { sampleCinematic } from './cinematic';
 import { Hud, el, richText } from './hud';
 
@@ -76,6 +77,8 @@ export class Runtime {
   private dragLook = false;
   private touchMove = new THREE.Vector2();
   private frame = 0;
+  private occ: OcclusionCuller | null = null;
+  private dbg: HTMLElement | null = null;
   private frameMs = 16;
   private ended = false;
 
@@ -142,6 +145,7 @@ export class Runtime {
     this.scene3.updateMatrixWorld(true);
     this.initState();
     this.collectColliders();
+    this.initOcclusion();
     this.loadAudio();
     this.spawn();
     if (this.terrain) for (let i = 0; i < 40 && this.terrain.update(this.camera.position, 24) > 0; i++);
@@ -164,7 +168,7 @@ export class Runtime {
       if (onExit) el('button', 'wr-btn ghost', row, 'Exit preview').onclick = () => onExit();
       const geo = this.scene.terrain?.geo;
       if (geo?.attribution && !pausedNow) el('div', 'wr-keys', o, geo.attribution);
-      el('div', 'wr-keys', o, `WASD move · Mouse look · Shift run${this.scene.player.jump ? ' · Space jump' : ''} · E interact · J journal · V camera · Esc pause`);
+      el('div', 'wr-keys', o, `WASD move · Mouse look · Shift run${this.scene.player.jump ? ' · Space jump' : ''} · E interact · J journal · V camera · F3 stats · Esc pause`);
     });
   }
 
@@ -203,6 +207,7 @@ export class Runtime {
     this.ro.disconnect();
     if (document.pointerLockElement === this.renderer.domElement) document.exitPointerLock();
     for (const s of this.sounds.values()) { try { if (s.isPlaying) s.stop(); } catch { /* not started */ } }
+    this.occ?.dispose();
     for (const n of this.nodes.values()) n.userData.dispose?.();
     this.terrain?.dispose();
     this.env.dispose();
@@ -232,6 +237,11 @@ export class Runtime {
       if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
       if (e.repeat) return;
       if (e.code === 'KeyJ') this.toggleJournal();
+      else if (e.code === 'F3') {
+        e.preventDefault();
+        if (this.dbg) { this.dbg.remove(); this.dbg = null; }
+        else { this.dbg = el('div', '', this.hud.root); this.dbg.style.cssText = 'position:absolute;right:10px;top:10px;padding:6px 10px;background:rgba(0,0,0,.6);color:#d7f5df;font:12px/1.5 ui-monospace,Menlo,monospace;white-space:pre;border-radius:6px;pointer-events:none;z-index:5'; this.updateDebug(); }
+      }
       else if (e.code === 'KeyV') this.scene.player.mode = this.scene.player.mode === 'first' ? 'third' : 'first';
       else if (e.code === 'Enter' && this.cine) this.cine.t = this.cine.c.duration;
       else if (e.code === 'Escape') { if (this.closePanels()) this.lock(); }
@@ -386,6 +396,53 @@ export class Runtime {
     }
   }
 
+  /** Register view blockers (walls, floors, big boxes, buildings, terrain) and everything that may be hidden behind them. */
+  private initOcclusion() {
+    this.occ?.dispose();
+    this.occ = null;
+    if (this.scene.player.occlusion === false) return;
+    const occ = new OcclusionCuller(this.opts.core, this.terrain?.ptr ?? 0);
+    const owners = new Map<string, number>(), owner = (id: string) => owners.get(id) ?? (owners.set(id, owners.size + 1), owners.size);
+    const moving = (id: string): boolean => {
+      for (let o: Obj | undefined = this.scene.objects[id]; o; o = o.parent ? this.scene.objects[o.parent] : undefined) if (o.kind === 'elevator' || o.kind === 'platform' || o.kind === 'door') return true;
+      return false;
+    };
+    const own = (node: THREE.Object3D) => { const l: THREE.Object3D[] = []; const walk = (n: THREE.Object3D) => { for (const c of n.children) { if (c.userData.id) continue; if ((c as any).isMesh) l.push(c); walk(c); } }; walk(node); return l; };
+    const box = new THREE.Box3();
+    for (const [id, node] of this.nodes) {
+      const o = this.scene.objects[id], p = o.props;
+      if (moving(id)) continue;
+      // --- occluders: opaque, static and big enough to be worth testing against
+      const cat = o.kind === 'prefab' ? PREFAB_MAP[p.prefab]?.cat : '';
+      const blocks = this.effectiveVisible(id) && (o.kind === 'wall' || o.kind === 'floor' || (o.kind === 'primitive' && p.shape === 'box' && (p.opacity ?? 1) >= 1 && p.solid !== false) || cat === 'Buildings' || cat === 'Houses');
+      if (blocks)
+        for (const c of this.colsById.get(id) ?? []) {
+          if (c.desc?.dynamic || c.desc?.tag) continue;
+          // Prefab boxes are bounding boxes: shrink them (houses to their walls, below the roof) so nothing is hidden wrongly.
+          const k = cat ? 0.9 : 1, ky = cat === 'Houses' ? 0.5 : cat ? 0.92 : 1;
+          const hx = c.hx * k, hy = c.hy * ky, hz = c.hz * k, dims = [hx, hy, hz].sort((a, b) => b - a);
+          if (dims[0] * 2 >= 1.5 && dims[1] * 2 >= 1.2) occ.addOccluder(owner(id), c.cx, c.cy - (c.hy - hy), c.cz, hx, hy, hz, c.ax, c.az);
+        }
+      // --- targets
+      if (o.kind === 'scatter') { for (const m of own(node)) occ.addTarget(owner(id), box.makeEmpty().expandByObject(m), [m]); continue; }
+      if (!['prefab', 'model', 'primitive', 'text', 'screen', 'wall', 'floor', 'stairs', 'window', 'poly'].includes(o.kind)) continue;
+      const meshes = own(node);
+      box.makeEmpty();
+      for (const m of meshes) box.expandByObject(m);
+      occ.addTarget(owner(id), box, meshes);
+    }
+    if (!occ.count || (!occ.occluders && !this.terrain)) { occ.dispose(); return; }
+    occ.commit();
+    this.occ = occ;
+  }
+
+  private updateDebug() {
+    if (!this.dbg) return;
+    const i = this.renderer.info.render, o = this.occ;
+    this.dbg.textContent = `${Math.round(1000 / Math.max(this.frameMs, 1))} fps · ${i.calls} draw calls · ${i.triangles.toLocaleString()} triangles\n` +
+      (o ? `occlusion: ${o.hidden} of ${o.count} objects hidden · ${o.occluders} blockers${this.terrain ? ' + terrain' : ''}` : 'occlusion: off') + `\nresolution ×${this.renderer.getPixelRatio().toFixed(2)} · F3 hides this`;
+  }
+
   private effectiveVisible(id: string) {
     for (let o: Obj | undefined = this.scene.objects[id]; o; o = o.parent ? this.scene.objects[o.parent] : undefined) if (!this.nodes.get(o.id)?.visible) return false;
     return true;
@@ -400,6 +457,7 @@ export class Runtime {
       this.scene.objects[i]?.children.forEach(walk);
     };
     walk(id);
+    if (this.occ) this.initOcclusion(); // a hidden wall no longer blocks the view, a shown one does
   }
 
   private spawn() {
@@ -527,7 +585,9 @@ export class Runtime {
       this.updateTriggers();
       if (!this.cine) this.updateAim();
     }
-    if (++this.frame % 8 === 0) cullByDistance(this.scene3, this.camera.position);
+    if (++this.frame % 3 === 0) this.occ?.update(this.camera.position, dt * 3);
+    if (this.frame % 8 === 0) cullByDistance(this.scene3, this.camera.position);
+    if (this.frame % 15 === 0) this.updateDebug();
     if (!this.paused && this.scene.player.autoQuality !== false) this.tuneQuality(dt);
     this.env.update(this.paused ? 0 : dt, this.camera.position);
     this.terrain?.update(this.camera.position, 3);

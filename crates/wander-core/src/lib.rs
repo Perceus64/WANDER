@@ -9,6 +9,8 @@
 //! (u8) per sample drive vertex colours.
 #![allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
 
+mod occlusion;
+use occlusion::Occlusion;
 use std::alloc::{alloc, dealloc, Layout};
 
 pub const LAYERS: usize = 8;
@@ -627,6 +629,36 @@ pub unsafe extern "C" fn fill_missing(data: *mut f32, len: u32, nodata: f32) -> 
     n
 }
 
+// ---------------------------------------------------------------- occlusion culling
+
+#[no_mangle]
+pub extern "C" fn occ_new() -> *mut Occlusion {
+    Box::into_raw(Box::new(Occlusion::default()))
+}
+#[no_mangle]
+pub unsafe extern "C" fn occ_free(o: *mut Occlusion) {
+    if !o.is_null() {
+        drop(Box::from_raw(o));
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn occ_clear(o: *mut Occlusion) {
+    (*o).clear();
+}
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn occ_add(o: *mut Occlusion, owner: u32, cx: f32, cy: f32, cz: f32, hx: f32, hy: f32, hz: f32, ax: f32, az: f32) {
+    (*o).add(owner, [cx, cy, cz], [hx, hy, hz], ax, az);
+}
+/// `targets`: n × 7 floats (centre, half-size, owner). `out`: n bytes, 1 = hidden. `terrain` may be null.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn occ_test(o: *mut Occlusion, terrain: *const Terrain, ex: f32, ey: f32, ez: f32, px: f32, py: f32, pz: f32, targets: *const f32, n: u32, out: *mut u8) {
+    let t = std::slice::from_raw_parts(targets, n as usize * occlusion::TARGET_STRIDE);
+    let res = std::slice::from_raw_parts_mut(out, n as usize);
+    (*o).test(terrain.as_ref(), [[ex, ey, ez], [px, py, pz]], t, res);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -684,5 +716,48 @@ mod tests {
         let mut o = [0f32; 1];
         resample_grid(&src, 2, 2, &[0.5], &[0.5], &mut o);
         assert!((o[0] - 5.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn occlusion_hides_only_what_is_fully_blocked() {
+        let mut o = Occlusion::default();
+        // A 10 m wide, 3 m tall wall at x = 5 facing the eye at the origin.
+        o.add(1, [5.0, 1.5, 0.0], [0.1, 1.5, 5.0], 1.0, 0.0);
+        let eye = [0.0, 1.6, 0.0];
+        let targets = [
+            10.0, 0.5, 0.0, 0.5, 0.5, 0.5, 2.0, // crate straight behind the wall: hidden
+            10.0, 6.0, 0.0, 0.5, 0.5, 0.5, 3.0, // high above the wall: visible
+            10.0, 0.5, 20.0, 0.5, 0.5, 0.5, 4.0, // far to the side: visible
+            5.3, 1.5, 0.0, 0.05, 0.4, 0.5, 5.0, // picture hanging on the wall: never hidden by the wall it touches
+            5.0, 1.5, 0.0, 0.1, 1.5, 5.0, 1.0, // the wall itself: visible
+            -10.0, 0.5, 0.0, 0.5, 0.5, 0.5, 6.0, // behind the eye, nothing in between: visible
+        ];
+        let mut out = [9u8; 6];
+        o.test(None, [eye, eye], &targets, &mut out);
+        assert_eq!(out, [1, 0, 0, 0, 0, 0]);
+        // Predicted eye position past the end of the wall reveals the crate.
+        o.test(None, [eye, [0.0, 1.6, 14.0]], &targets, &mut out);
+        assert_eq!(out[0], 0);
+        // Standing inside an occluder never hides anything.
+        o.add(7, [0.0, 1.5, 0.0], [2.0, 2.0, 2.0], 1.0, 0.0);
+        o.test(None, [eye, eye], &targets, &mut out);
+        assert_eq!(out[0], 1); // still hidden by the wall, the enclosing box is ignored
+    }
+
+    #[test]
+    fn terrain_hides_objects_behind_a_hill() {
+        let mut t = Terrain::new(129, 129, 2.0);
+        // A ridge 30 m high across x = 0.
+        for j in 0..129usize {
+            for i in 60..69usize {
+                t.heights[j * 129 + i] = 30.0;
+            }
+        }
+        let mut o = Occlusion::default();
+        let eye = [-80.0, 2.0, 0.0];
+        let targets = [80.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 80.0, 120.0, 0.0, 1.0, 1.0, 1.0, 2.0, -40.0, 1.0, 10.0, 1.0, 1.0, 1.0, 3.0];
+        let mut out = [9u8; 3];
+        o.test(Some(&t), [eye, eye], &targets, &mut out);
+        assert_eq!(out, [1, 0, 0]);
     }
 }

@@ -82,6 +82,8 @@ export interface PlayerSettings {
   footsteps: boolean;
   /** Lower the rendering resolution automatically when the frame rate drops (default on). */
   autoQuality?: boolean;
+  /** Skip drawing objects that are completely hidden behind walls, buildings or hills (default on). */
+  occlusion?: boolean;
 }
 
 export interface Condition { name: string; op: '=' | '!=' | '>' | '<' | '>=' | '<='; value: number }

@@ -192,6 +192,7 @@ function PlayerTab() {
         <Row label="Run speed (m/s)"><Num value={p.runSpeed} min={0.5} onChange={(v) => set({ runSpeed: v })} /></Row>
         <div className="row"><Check value={p.jump} onChange={(v) => set({ jump: v })} label="Allow jumping" /><Check value={p.footsteps} onChange={(v) => set({ footsteps: v })} label="Footstep sounds" /></div>
         <div className="row" title="Lowers the rendering resolution when the frame rate drops on slow devices, and restores it when possible"><Check value={p.autoQuality !== false} onChange={(v) => set({ autoQuality: v })} label="Automatic quality (keeps it smooth)" /></div>
+        <div className="row" title="Objects completely hidden behind walls, floors, buildings or hills are not drawn. Press F3 while playing to see how many are skipped."><Check value={p.occlusion !== false} onChange={(v) => set({ occlusion: v })} label="Occlusion culling (skip hidden objects)" /></div>
         {p.jump && <Row label="Jump height (m)"><Num value={p.jumpHeight} min={0.2} max={10} onChange={(v) => set({ jumpHeight: v })} /></Row>}
       </Section>
       <Section title="Interaction"><Row label="Reach distance (m)"><Num value={p.interactDistance} min={0.5} onChange={(v) => set({ interactDistance: v })} /></Row></Section>

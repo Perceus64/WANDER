@@ -58,8 +58,14 @@ Everything below is driven from the visual editor; nothing requires code.
 - **Cinematics**: timeline with camera keyframes taken from the viewport, easing, field of view, subtitles, title card, fades, letterbox, synchronised audio, preview scrubbing; playable from events, returning control to the player afterwards.
 - **Atmosphere**: sun position, colours, ambient light, fog, shadows, rain and snow, exposure, bloom, saturation and contrast, optional day/night cycle, eight presets plus your own saved presets.
 - **Audio**: music, ambient and positional 3D sources, looping, fades, distance settings, event-triggered playback.
-- **Projects**: new, open, autosave (every 20 s), rename, duplicate, delete, version history with restore, import/export as an archive, ten starter templates plus a **Feature showcase** world that demonstrates every system in one guided tour (it generates its own image, GIF and sounds, so it needs no downloads).
+- **Projects**: new, open, autosave (every 20 s), rename, duplicate, delete, version history with restore, import/export as an archive, eleven starter templates (including a furnished **Computer lab**) plus a **Feature showcase** world that demonstrates every system in one guided tour (it generates its own image, GIF and sounds, so it needs no downloads).
 - **Publishing**: validation report (missing spawn, broken references, missing assets, unconfigured interactions, performance warnings), standalone web build, plus exports of the complete project, assets and world data.
+
+## Occlusion culling
+
+While playing, objects that are completely hidden behind walls, floors, large solid boxes, buildings or hills are not drawn. The tests run in the Rust core (`crates/wander-core/src/occlusion.rs`): sight lines are cast from the eye to a grid of points in each object's bounding box, against the blocking boxes and the terrain heightfield. An object is hidden only when every line is blocked, both from the current eye position and from a position predicted along the direction of travel, and only after two agreeing tests, so things do not flicker or pop at corners. Doors, elevators and platforms never block the view; windows and doorways are open, so rooms stay visible through them. Scattered vegetation is tested per ground cell.
+
+It is on by default (Player tab → *Occlusion culling*). Press **F3** while playing to see frame rate, draw calls, triangles and how many objects are currently skipped. In the bundled templates it removes between a few percent and two thirds of the draw calls depending on the view (for example 556 → 191 in the open-world landscape looking across the hills, 257 → 139 outside the computer lab), with rendered images identical to culling switched off in the views that were compared.
 
 ## What is a foundation, and what is not there yet
 
@@ -69,7 +75,7 @@ The specification asks for the full engine to be built in phases. These parts ar
 | --- | --- | --- |
 | Rendering | WebGL2 only | Swap in three.js `WebGPURenderer` (it falls back to WebGL2); the custom sky shader and post chain need node-material ports |
 | Player physics | TypeScript, upright box colliders | Move to the Rust core next to terrain; add rotated colliders and ramps |
-| Culling | Frustum culling and distance-based terrain streaming | Occlusion culling; streaming of objects and textures by region |
+| Culling | Frustum, distance and occlusion culling (see below); distance-based terrain streaming | Occlusion of terrain chunks themselves; streaming of objects and textures by region |
 | Web Workers | Not used; heavy work is sliced across frames | Run the WASM core in a worker for chunk meshing and imports |
 | Cinematic tracks | Camera, subtitles, title, fades, audio | Object-movement, lighting and environment keyframe tracks |
 | Events | Block list editor | Free-form node graph view of the same data |

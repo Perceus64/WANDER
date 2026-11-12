@@ -231,6 +231,83 @@ function buildShowcase(ed: Editor) {
   rule(ed, 'All crystals found', { type: 'variable', name: 'crystals' }, [{ type: 'objective', text: 'Return to the plaza' }, { type: 'show', target: trophy.id }, { type: 'environment', preset: 'Showcase glow' }, { type: 'dialogue', speaker: 'Guide', text: 'All three! A golden trophy has appeared on the plaza, and the sky changed to a saved custom preset.', seconds: 8 }, { type: 'wait', seconds: 8 }, { type: 'objective', text: '' }, { type: 'message', text: 'That is the tour. Press Esc, stop the preview and start changing things.', seconds: 10 }], true, [{ name: 'crystals', op: '>=', value: 3 }]);
 }
 
+/** A furnished computer lab: rows of workstations, teaching wall, server corner, printing area and a short guided activity. */
+function buildComputerLab(ed: Editor) {
+  const slide = ed.addAsset(pngFile('Lesson slide.png', 960, 540, (g) => {
+    g.fillStyle = '#10243d'; g.fillRect(0, 0, 960, 540);
+    g.fillStyle = '#e8a33d'; g.fillRect(0, 0, 960, 12); g.fillRect(60, 150, 120, 6);
+    g.fillStyle = '#fff'; g.font = 'bold 58px sans-serif'; g.fillText('Lesson 1: How networks work', 60, 120);
+    g.font = '32px sans-serif';
+    ['Every computer in this lab connects to the switch', 'The switch connects to the server rack and router', 'The router connects the lab to the internet'].forEach((t, i) => { g.fillStyle = '#e8a33d'; g.fillRect(64, 222 + i * 70, 14, 14); g.fillStyle = '#dfe8f2'; g.fillText(t, 100, 240 + i * 70); });
+    g.fillStyle = '#7f93aa'; g.font = '24px sans-serif'; g.fillText('Replace this slide: select the screen and choose your own image, GIF or video', 60, 500);
+  }), 'image');
+  const BARS = [[16, 36, 61], [63, 217, 106], [232, 163, 61], [255, 255, 255], [42, 93, 148]];
+  const status = ed.addAsset(gifFile('Server status.gif', 96, 54, 10, 14, BARS, (x, y, f) => (y < 8 ? 4 : y > 44 ? (x < 8 + f * 9 ? 2 : 0) : x > 6 && x < 90 && (y - 12) % 8 < 5 ? ((((x >> 3) * 7 + ((y - 12) >> 3) * 5 + f) % 9 < 6 ? 1 : 0)) : 0)), 'image');
+
+  ed.createTerrain({ size: 65, cell: 4, seed: 3, amplitude: 0, frequency: 0.01, flat: true });
+  Object.assign(ed.scene.env, structuredClone(ENV_PRESETS['Sunny afternoon']), { bloom: 0.12 });
+  const W = 14, D = 10, H = 3.2, F = 0.05;
+  const { g, walls } = room(ed, 'Computer lab', 0, 0, 0, W, D, H, { color: '#e9ecef', floorColor: '#5f6b78' });
+  const at = (key: string, x: number, z: number, rotY = 0, y = F, name?: string) => prefab(ed, key, x, z, rotY, g.id, y, name);
+  const door = opening(ed, walls.south, 'door', 11.5, { style: 'sliding', auto: true, width: 1.5, color: '#3d4b5c' });
+  [2.4, 5, 7.6].forEach((a) => opening(ed, walls.west, 'window', a, { width: 1.8, height: 1.4 }));
+  opening(ed, walls.east, 'window', 3, { width: 1.8, height: 1.4 });
+
+  // Student rows: twelve complete workstations facing the teaching wall.
+  const rows = ed.spawn('group', 'Student workstations', { folder: true }, [0, 0, 0], g.id);
+  let n = 0;
+  for (const z of [-1.3, 0.9, 3.1]) for (const x of [-5.6, -3.7, -1.3, 0.6]) prefab(ed, 'workstation', x, z, 0, rows.id, F, `Workstation ${++n}`);
+
+  // Teaching wall: projected lesson, whiteboard, clock, teacher's desk and a ceiling projector.
+  ed.spawn('screen', 'Lesson screen', { media: slide, width: 3.4, height: 1.92, frame: '#22252a' }, [-1.6, 0.95, -4.86], g.id);
+  at('whiteboard', 2.4, -4.87); at('clock', 4.4, -4.86, 0, 0.8);
+  at('workstation', 4.6, -3.1, 180, F, 'Teacher’s desk'); at('desk_phone', 5.1, -3.3, 180, 0.81); at('desk_lamp', 4.1, -3.35, 180, 0.81);
+  at('projector', -1.6, -1.6, 180, 2.86, 'Ceiling projector');
+  ed.spawn('primitive', 'Projector mount', { shape: 'cylinder', color: '#2a2e35', solid: false }, [-1.6, 3.08, -1.6], g.id, { scale: [0.05, 0.24, 0.05] });
+
+  // Server corner (south-east) with a live status display.
+  at('server_rack', 6.45, 3.9, -90); at('server_rack', 6.45, 2.95, -90, F, 'Server rack 2'); at('filing_cabinet', 6.6, 1.9, -90); at('network_switch', 6.55, 1.9, -90, 1.38); at('router', 6.55, 1.9, -90, 1.43);
+  ed.spawn('screen', 'Server status display', { media: status, width: 0.96, height: 0.54, fit: 'stretch' }, [6.86, 1.75, 0.6], g.id, { rot: [0, -90, 0] });
+  // Printing and break area (west wall and south-west corner).
+  at('copier', -6.5, 4.2, 90); at('table', -6.4, 2.6, 90); at('desk_printer', -6.4, 2.9, 90, 0.83); at('waste_bin', -6.6, 1.6); at('water_cooler', -6.6, -4.4, 90); at('potted_plant', -6.5, -3.5);
+  at('lockers', -3.4, 4.72, 180); at('lockers', -2.45, 4.72, 180, F, 'Lockers 2'); at('notice_board', 0.4, 4.88, 180); at('bookcase_office', 2.2, 4.75, 180); at('potted_plant', 6.4, -4.4); at('waste_bin', 5.6, 4.5);
+  // Laptop bar along the east wall.
+  at('table', 6.45, -1.4, 90, F, 'Laptop bar'); at('laptop', 6.45, -1.75, -90, 0.83); at('laptop', 6.45, -1.0, -90, 0.83, 'Laptop 2'); at('visitor_chair', 5.7, -1.75, 90); at('visitor_chair', 5.7, -1.0, 90, F, 'Visitor chair 2');
+  const lights = ed.spawn('group', 'Ceiling lights', {}, [0, 0, 0], g.id);
+  for (const [x, z] of [[-3.5, -2], [3.5, -2], [-3.5, 2.4], [3.5, 2.4]]) prefab(ed, 'ceiling_light', x, z, 0, lights.id, H);
+
+  // Outside: approach, sign and a little greenery.
+  ed.spawn('text', 'Lab sign', { text: 'COMPUTER LAB', width: 3.6, height: 0.55, color: '#ffffff', background: '#10243d' }, [4.4, 2.45, 5.14], g.id);
+  ed.spawn('road', 'Path to the lab', { points: [[0, 0], [0, -11]], width: 2.4, color: '#8a8f96' }, [4.4, 0, 17]);
+  prefab(ed, 'street_lamp', 6.6, 9, 180); prefab(ed, 'bench', 2, 7.2, 0); prefab(ed, 'bicycle', 8.6, 6.2, 20); prefab(ed, 'trash_bin', 6.4, 6.2);
+  scatter(ed, 'tree_oak', 'Trees', 46, 110, 71, (x, z) => Math.abs(x) < 11 && z > -9 && z < 22); scatter(ed, 'bush', 'Hedges', 60, 40, 72, (x, z) => Math.abs(x) < 9 && Math.abs(z) < 7.5 || Math.abs(x - 4.4) < 2.5 && z > 0);
+  spawnAt(ed, 4.4, 15, 0);
+
+  // Information points.
+  info(ed, 'Today’s lesson', 'The lesson screen plays any image, GIF or video.\n\n**Try it:** select the screen in the editor and choose your own slides under *Plays*.', [-1.6, 1.5, -3.6], { template: 'education', activation: 'key', distance: 3.2 }, g.id);
+  info(ed, 'Server corner', 'Two racks, a switch and the Wi-Fi router. Everything in the lab connects here.\n\nThe small display shows an animated status GIF.', [5.6, 1.5, 3.2], { distance: 2.2, template: 'object' }, g.id);
+  info(ed, 'Printing area', 'Photocopier and a desktop printer. Add your own print rules or opening hours here.', [-5.6, 1.5, 3.4], { distance: 2.2 }, g.id);
+  info(ed, 'Workstation', 'Each workstation is a single library object (desk, chair, PC, monitor, keyboard and mouse). The separate pieces are in the **Office** and **Computers** categories if you want a different layout.', [-1.3, 1.25, -0.9], { activation: 'click', distance: 3 }, g.id);
+
+  // Activity: find three USB drives; a switch dims the lights for the presentation; a short tour on entry.
+  const usb = (name: string, pos: Vec3, note: string) => ed.spawn('primitive', name, { shape: 'box', color: '#ff5d7a', emissive: 1.8, solid: false, collectible: true, note }, pos, g.id, { scale: [0.07, 0.025, 0.2] });
+  const drives = [usb('USB drive (teacher)', [4.2, 0.83, -2.9], 'Labelled “Lesson plans”.'), usb('USB drive (server)', [6.55, 1.44, 2.1], 'Labelled “Backups – do not remove”. Oops.'), usb('USB drive (laptop bar)', [6.3, 0.85, -1.4], 'Labelled “Group project, final FINAL v3”.')];
+  const sw = ed.spawn('prefab', 'Light switch', { prefab: 'button_panel', interactable: true, prompt: 'Dim the lights for the presentation' }, [3.2, 0, 4.86], g.id, { rot: [0, 180, 0] });
+  const entry = ed.spawn('trigger', 'Entrance zone', { size: [2.4, 3, 1.6] }, [4.4, 0, 4], g.id);
+  const serverZone = ed.spawn('trigger', 'Server zone', { size: [2.2, 3, 3.4] }, [5.9, 0, 3], g.id);
+  const tour = cinematic(ed, 'Lab tour', 12, [camKey(0, [4.4, 1.7, 4.2], [-1.6, 1.6, -4.8]), camKey(4, [5.5, 2.5, -0.5], [-4, 0.9, 1]), camKey(8, [-5.8, 2.4, -3.6], [1, 0.9, 2.5]), camKey(12, [0, 1.9, 4], [-1.6, 1.8, -4.8], 45)],
+    { title: 'COMPUTER LAB', subtitles: [{ t: 1.5, d: 3, text: 'Twelve workstations face the teaching wall.' }, { t: 5, d: 3, text: 'Servers and network gear sit in the corner.' }, { t: 8.5, d: 3, text: 'Three USB drives were left behind. Can you find them?' }] });
+  rule(ed, 'Welcome', { type: 'start' }, [{ type: 'objective', text: 'Enter the computer lab' }, { type: 'message', text: 'The door opens by itself. E interacts, J opens the journal.', seconds: 6 }]);
+  rule(ed, 'Tour on entry', { type: 'enterZone', target: entry.id }, [{ type: 'cinematic', id: tour.id }]);
+  rule(ed, 'After the tour', { type: 'cinematicEnd', target: tour.id }, [{ type: 'objective', text: 'Find the 3 USB drives (0/3)' }, { type: 'checkpoint' }, { type: 'dialogue', speaker: 'Instructor', text: 'Welcome. Take a look around, and if you spot any USB drives, please collect them.', seconds: 6 }]);
+  rule(ed, 'Dim the lights', { type: 'interact', target: sw.id }, [{ type: 'hide', target: lights.id }, { type: 'environment', preset: 'Night' }, { type: 'subtitle', text: 'Lights dimmed for the presentation – they come back in 15 seconds.', seconds: 5 }, { type: 'wait', seconds: 15 }, { type: 'show', target: lights.id }, { type: 'environment', preset: 'Sunny afternoon' }], false);
+  rule(ed, 'Server corner notice', { type: 'enterZone', target: serverZone.id }, [{ type: 'subtitle', text: 'Server corner: authorised staff only.', seconds: 4 }], false);
+  drives.forEach((d, i) => rule(ed, `Drive ${i + 1} collected`, { type: 'collect', target: d.id }, [{ type: 'setVar', name: 'drives', op: 'add', value: 1 }]));
+  [1, 2].forEach((k) => rule(ed, `${k} drive${k > 1 ? 's' : ''} found`, { type: 'variable', name: 'drives' }, [{ type: 'objective', text: `Find the 3 USB drives (${k}/3)` }], true, [{ name: 'drives', op: '=', value: k }]));
+  rule(ed, 'All drives found', { type: 'variable', name: 'drives' }, [{ type: 'objective', text: '' }, { type: 'dialogue', speaker: 'Instructor', text: 'All three – thank you! The lab is yours. Stop the preview to rearrange it or add your own lesson.', seconds: 9 }], true, [{ name: 'drives', op: '>=', value: 3 }]);
+  void door;
+}
+
 export const TEMPLATES: Template[] = [
   { key: 'showcase', name: 'Feature showcase', blurb: 'A guided tour of everything: terrain, a two-storey building, machinery, screens, events, a cinematic and more.', build: buildShowcase },
   { key: 'blank', name: 'Empty world', blurb: 'A clean grid. Start from nothing.', build(ed) { spawnAt(ed, 0, 6, 0); } },
@@ -425,6 +502,7 @@ export const TEMPLATES: Template[] = [
       rule(ed, 'Door hint', { type: 'near', target: door.id, value: 2.5 }, [{ type: 'message', text: 'Locked. There must be a key somewhere near the campfire.', seconds: 5 }], true, [{ name: 'hasKey', op: '=', value: 0 }]);
     },
   },
+  { key: 'computerlab', name: 'Computer lab', blurb: 'Twelve workstations, a teaching wall with a lesson screen, a server corner and a find-the-USB-drives activity.', build: buildComputerLab },
   {
     key: 'gallery', name: 'Virtual art gallery', blurb: 'White-cube gallery with spot-lit canvases and click-to-read labels.',
     build(ed) {
