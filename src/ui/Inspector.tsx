@@ -22,6 +22,7 @@ const FIELDS: Partial<Record<Kind, { main: F[]; adv?: F[]; behave?: boolean }>> 
     adv: [['key', 'Interaction key', 'sel', ['E', 'F', 'R', 'Q', 'T']], ['audio', 'Audio (when opened)', 'asset', 'audio'], ['video', 'Video file', 'asset', 'video'], ['link', 'External link', 'text', 'https://…'], ['linkLabel', 'Link label', 'text'], ['color', 'Accent colour', 'color'], ['background', 'Background', 'color'], ['text', 'Text colour', 'color'], ['font', 'Typography', 'sel', [['sans', 'Sans-serif'], ['serif', 'Serif'], ['mono', 'Monospace']]], ['animation', 'Show animation', 'sel', ['fade', 'slide', 'none']], ['marker', 'Show marker icon in world', 'bool']],
   },
   trigger: { main: [['size', 'Zone size (m)', 'vec']] },
+  mesh: { main: [['roughness', 'Roughness', 'slider', [0, 1]], ['metalness', 'Metalness', 'slider', [0, 1]]], behave: true },
   screen: { main: [['media', 'Plays', 'asset', 'media', 'Any imported image, animated GIF or video (MP4/WebM)'], ['width', 'Width (m)', 'num', { min: 0.2 }], ['height', 'Height (m)', 'num', { min: 0.2 }], ['fit', 'Picture fit', 'sel', [['contain', 'Keep proportions'], ['stretch', 'Stretch to fill']]], ['loop', 'Loop video', 'bool'], ['sound', 'Play video sound', 'bool', null, 'Heard while playing the world; the editor preview stays muted'], ['volume', 'Volume', 'slider', [0, 1]]], adv: [['frame', 'Frame colour', 'color']], behave: true },
   wall: { main: [['length', 'Length (m)', 'num', { min: 0.3 }], ['height', 'Height (m)', 'num', { min: 0.3 }], ['thickness', 'Thickness (m)', 'num', { min: 0.05, step: 0.05 }], ...MAT] },
   floor: { main: [['width', 'Width (m)', 'num', { min: 0.2 }], ['depth', 'Depth (m)', 'num', { min: 0.2 }], ['thickness', 'Thickness (m)', 'num', { min: 0.02, step: 0.05 }], ...MAT] },
@@ -52,6 +53,47 @@ function Field({ f, o, ed }: { f: F; o: Obj; ed: Editor }) {
   else if (type === 'vec') c = <Vec value={v} onChange={set} />;
   else if (type === 'prefab') c = <Sel value={v} onChange={set} options={PREFABS.map((p) => [p.key, `${p.cat} – ${p.name}`] as const)} />;
   return <Row label={label} tip={tip}>{c}</Row>;
+}
+
+/** The mesh editor's tool panel: element modes, gizmo, and modelling operations. */
+function MeshPanel({ o, ed }: { o: Obj; ed: Editor }) {
+  const me = ed.viewport?.mesh, editing = ed.tool === 'mesh' && me?.id === o.id;
+  const [dist, setDist] = useState(0.5), [amount, setAmount] = useState(0.2), [color, setColor] = useState('#e8a33d');
+  const stats = `${o.props.verts.length / 3} vertices · ${o.props.faces.length} faces`;
+  if (!editing || !me)
+    return (
+      <Section title="Mesh editor">
+        <p className="hint">{stats}. Reshape this object by moving its vertices, edges and faces, extruding, insetting, cutting and painting.</p>
+        <div className="btns"><Btn kind="primary" onClick={() => ed.editMesh(o.id)}>✎ Edit mesh</Btn></div>
+      </Section>
+    );
+  const n = me.sel.size, faceMode = me.mode === 'face';
+  return (
+    <Section title="Mesh editor">
+      <p className="hint">{stats} · {n} {me.mode}{n === 1 ? '' : me.mode === 'vertex' ? ' points' : 's'} selected</p>
+      <Row label="Select" tip="What a click picks (keys 1, 2, 3)"><div className="chips">{(['vertex', 'edge', 'face'] as const).map((m, i) => <Btn key={m} kind="chip" active={me.mode === m} tip={`${m[0].toUpperCase() + m.slice(1)} mode (${i + 1})`} onClick={() => me.setMode(m)}>{m[0].toUpperCase() + m.slice(1)}</Btn>)}</div></Row>
+      <Row label="Gizmo" tip="How dragging changes the selection (keys W, E, R)"><div className="chips">{([['translate', 'Move'], ['rotate', 'Rotate'], ['scale', 'Scale']] as const).map(([m, l]) => <Btn key={m} kind="chip" active={me.gizmoMode === m} onClick={() => me.setGizmo(m)}>{l}</Btn>)}</div></Row>
+      <div className="btns">
+        <Btn kind="mini" tip="Select everything (Ctrl+A)" onClick={() => me.selectAll()}>All</Btn>
+        <Btn kind="mini" tip="Extend the selection to the whole flat area (double-click a face)" disabled={!faceMode || !n} onClick={() => me.growFlat()}>Flat area</Btn>
+        <Btn kind="mini" tip="Clear the selection" disabled={!n} onClick={() => { me.sel.clear(); me.refresh(); ed.emit(); }}>None</Btn>
+      </div>
+      <Row label="Extrude by (m)" tip="How far Extrude pulls the selected faces out (negative pushes in)"><Num value={dist} step={0.1} onChange={setDist} /></Row>
+      <Row label="Inset amount" tip="How far Inset shrinks the selected faces inside a border"><Slider value={amount} min={0.05} max={0.9} step={0.05} onChange={setAmount} /></Row>
+      <Row label="Paint colour"><Color value={color} onChange={setColor} /></Row>
+      <div className="btns">
+        <Btn kind="mini" tip="Pull the selected faces out (key X, or hold Shift while dragging the gizmo)" disabled={!faceMode || !n} onClick={() => me.extrude(dist)}>Extrude</Btn>
+        <Btn kind="mini" tip="Shrink the selected faces inside a border, e.g. for window frames or panels (key I)" disabled={!faceMode || !n} onClick={() => me.inset(amount)}>Inset</Btn>
+        <Btn kind="mini" tip="Colour the selected faces" disabled={!faceMode || !n} onClick={() => me.paint(color)}>Paint</Btn>
+        <Btn kind="mini" tip="Split each selected face into smaller faces" disabled={!faceMode || !n} onClick={() => me.subdivide()}>Subdivide</Btn>
+        <Btn kind="mini" tip="Delete the selected faces (Del)" disabled={!faceMode || !n} onClick={() => me.remove()}>Delete</Btn>
+        <Btn kind="mini" tip="Turn the selected faces inside out" disabled={!faceMode || !n} onClick={() => me.flip()}>Flip</Btn>
+        <Btn kind="mini" tip="Collapse the selection into a single point" disabled={n < 1} onClick={() => me.merge()}>Merge</Btn>
+        <Btn kind="mini" tip="Put the object's origin at the centre of its base, so it sits on the ground and snaps cleanly" onClick={() => me.originToBase()}>Origin to base</Btn>
+      </div>
+      <div className="btns"><Btn kind="primary" tip="Leave the mesh editor (Esc)" onClick={() => ed.stopMeshEdit()}>Done</Btn></div>
+    </Section>
+  );
 }
 
 /** Statistics of an imported model and the one-click optimiser. */
@@ -131,6 +173,8 @@ function ObjectTab() {
         </Section>
       )}
       {o.kind === 'elevator' && <Floors o={o} ed={ed} />}
+      {o.kind === 'mesh' && <MeshPanel o={o} ed={ed} />}
+      {['prefab', 'primitive', 'wall', 'floor', 'stairs', 'poly', 'model', 'scatter'].includes(o.kind) && <Section title="Mesh editor" open={false}><p className="hint">Convert this object into an editable mesh to reshape it: move vertices, edges and faces, extrude, inset, cut and paint.{o.kind === 'model' ? ' Textures are not carried over: faces take the material colours.' : ''}{o.kind === 'prefab' && o.props.lightOn !== undefined ? '' : ''}</p><div className="btns"><Btn onClick={() => { const m = ed.makeEditable(o.id); if (m) ed.editMesh(m.id); }}>Convert to editable mesh</Btn></div></Section>}
       {o.kind === 'model' && ed.scene.assets[o.props.asset] && <ModelStats id={o.props.asset} ed={ed} />}
       {o.kind === 'group' && o.props.room && <Section title="Building"><Btn onClick={() => addStorey(ed, o)} tip="Copies this room one storey up">+ Add storey above</Btn></Section>}
       {o.kind === 'scatter' && <Section title="Instances"><p className="hint">{o.props.items.length / 4} instances, drawn in batches per ground cell and hidden beyond their draw distance. Paint more with the Scatter brush (World tab); hold Shift to erase.</p><Btn onClick={() => ed.setProps(o.id, { items: [] })}>Clear all</Btn></Section>}

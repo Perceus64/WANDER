@@ -7,7 +7,7 @@ export const FORMAT_VERSION = 1;
 export type Kind =
   | 'group' | 'primitive' | 'prefab' | 'model' | 'text' | 'light' | 'audio' | 'spawn'
   | 'info' | 'trigger' | 'wall' | 'floor' | 'door' | 'window' | 'stairs' | 'elevator'
-  | 'platform' | 'screen' | 'road' | 'poly' | 'scatter' | 'water';
+  | 'platform' | 'screen' | 'mesh' | 'road' | 'poly' | 'scatter' | 'water';
 
 export interface Obj {
   id: string;
@@ -231,6 +231,7 @@ export const KIND_DEFAULTS: Record<Kind, Record<string, any>> = {
   elevator: { floors: [{ name: 'G', y: 0 }, { name: '1', y: 3.2 }], speed: 1.6, startFloor: 0, doorTime: 4, width: 2, depth: 2, height: 2.4, color: '#a9adb3', light: '#fff1d6', sound: true },
   platform: { size: [2, 0.25, 2], offset: [0, 3, 0], speed: 1.5, pause: 1.5, mode: 'loop', color: '#6d7e91' },
   screen: { media: '', width: 1.6, height: 0.9, fit: 'contain', loop: true, sound: false, volume: 0.8, frame: '#15171b', solid: true },
+  mesh: { verts: [], faces: [], colors: [], solid: true, roughness: 0.85, metalness: 0 },
   road: { points: [], width: 6, color: '#3c3d40', sidewalks: false, kindOf: 'road' },
   poly: { points: [], height: 0, color: '#9c948a', opacity: 1 },
   scatter: { prefab: 'tree_pine', items: [], solid: true },

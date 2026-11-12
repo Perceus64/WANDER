@@ -6,6 +6,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { AssetProvider, Obj, Scene } from './types';
 import { PREFAB_MAP, prefabCollider, prefabGeometry, prefabMaterial } from './prefabs';
+import { buildGeometry, type MeshData } from './meshdata';
 
 export interface BuildCtx {
   editor: boolean;
@@ -312,6 +313,16 @@ const BUILDERS: Partial<Record<Obj['kind'], Builder>> = {
       }
       if (tex) show(tex, (tex.image as any).width, (tex.image as any).height);
     })().catch((e) => console.warn(`Screen "${o.name}" could not load its media`, e));
+  },
+  mesh(o, node) {
+    const p = o.props;
+    if (!p.faces?.length) return;
+    const g = buildGeometry(p as MeshData);
+    const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: p.roughness ?? 0.85, metalness: p.metalness ?? 0, side: THREE.DoubleSide }));
+    m.userData.cullDist = THREE.MathUtils.clamp((g.boundingSphere?.radius ?? 1) * 240, 140, 5000);
+    node.add(m);
+    const b = g.boundingBox;
+    if (p.solid !== false && b && !b.isEmpty()) col(node, [b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z]);
   },
   light(o, node, ctx) {
     const p = o.props;

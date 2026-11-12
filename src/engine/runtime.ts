@@ -425,7 +425,7 @@ export class Runtime {
         }
       // --- targets
       if (o.kind === 'scatter') { for (const m of own(node)) occ.addTarget(owner(id), box.makeEmpty().expandByObject(m), [m]); continue; }
-      if (!['prefab', 'model', 'primitive', 'text', 'screen', 'wall', 'floor', 'stairs', 'window', 'poly'].includes(o.kind)) continue;
+      if (!['prefab', 'model', 'primitive', 'mesh', 'text', 'screen', 'wall', 'floor', 'stairs', 'window', 'poly'].includes(o.kind)) continue;
       const meshes = own(node);
       box.makeEmpty();
       for (const m of meshes) box.expandByObject(m);

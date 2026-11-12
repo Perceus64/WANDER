@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { PREFABS, PREFAB_CATEGORIES } from '../engine/prefabs';
 import { prefabThumb, warmThumbs } from '../editor/thumbs';
+import { SHAPES } from '../engine/meshdata';
 import { CHUNK } from '../engine/terrain';
 import type { Obj } from '../engine/types';
 import type { DropPayload, Editor, Tool } from '../editor/editor';
@@ -58,6 +59,7 @@ function Library() {
       <div className="search"><input className="in" placeholder="Search assets…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search assets" /></div>
       <div className="scroll">
         <Section title="Essentials"><div className="grid">{BASICS.filter((b) => match(b.label)).map((b) => <Item key={b.label} {...b} ed={ed} />)}</div></Section>
+        <Section title="Editable shapes" open={!!s}><p className="hint">Shapes you can remodel with the mesh editor: select one and press “Edit mesh” in the Inspector.</p><div className="grid">{Object.entries(SHAPES).filter(([, v]) => match(v.label) || match('editable shape mesh')).map(([k, v]) => <Item key={k} label={v.label} icon="⬡" d={{ type: 'kind', key: 'mesh', name: v.label, props: v.make() }} ed={ed} tip="Editable mesh – reshape it with the mesh editor" />)}</div></Section>
         <Section title="Building parts"><div className="grid">{BUILDING.filter((b) => match(b.label)).map((b) => <Item key={b.label} {...b} ed={ed} />)}</div></Section>
         {PREFAB_CATEGORIES.map((cat) => {
           const list = PREFABS.filter((p) => p.cat === cat && (match(p.name) || match(cat)));
@@ -92,7 +94,7 @@ function Library() {
   );
 }
 
-const KIND_ICON: Record<string, string> = { group: '📁', primitive: '◼', prefab: '◆', model: '📦', text: '🔤', light: '💡', audio: '🔊', spawn: '🧍', info: 'ℹ️', trigger: '⬚', wall: '🧱', floor: '▬', door: '🚪', window: '🪟', stairs: '🪜', elevator: '🛗', platform: '⇅', road: '🛣', poly: '⬠', scatter: '🌲', water: '🌊' };
+const KIND_ICON: Record<string, string> = { mesh: '⬡', group: '📁', primitive: '◼', prefab: '◆', model: '📦', text: '🔤', light: '💡', audio: '🔊', spawn: '🧍', info: 'ℹ️', trigger: '⬚', wall: '🧱', floor: '▬', door: '🚪', window: '🪟', stairs: '🪜', elevator: '🛗', platform: '⇅', road: '🛣', poly: '⬠', scatter: '🌲', water: '🌊' };
 
 function Node({ o, depth, ed, closed, toggle }: { o: Obj; depth: number; ed: Editor; closed: Set<string>; toggle(id: string): void }) {
   const [edit, setEdit] = useState(false), [over, setOver] = useState(false);

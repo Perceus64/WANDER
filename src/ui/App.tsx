@@ -17,6 +17,7 @@ const HINT: Record<Tool, string> = {
   sculpt: 'Drag on the terrain to sculpt · Shift inverts · Alt+drag orbits', paint: 'Drag on the terrain to paint the selected material · Alt+drag orbits',
   scatter: 'Drag to scatter · Shift+drag erases · Alt+drag orbits', wall: 'Click to place wall corners · double-click or Enter to finish · Esc cancels',
   room: 'Drag a rectangle to create a room', road: 'Click to add points · double-click or Enter to finish · Esc cancels',
+  mesh: 'Mesh editor: click to pick · Shift+click adds · double-click selects the flat area · drag the gizmo to move · Shift+drag extrudes · 1/2/3 vertex/edge/face · Esc finishes',
 };
 
 function Shell() {
@@ -65,10 +66,20 @@ function Shell() {
         else if (k === 'c') ed.copy();
         else if (k === 'v') ed.paste();
         else if (k === 'g') { e.preventDefault(); ed.group(); }
-        else if (k === 'a') { e.preventDefault(); ed.select(ed.scene.roots.filter((id) => !ed.obj(id)?.locked)); }
+        else if (k === 'a') { e.preventDefault(); if (ed.tool === 'mesh') ed.viewport?.mesh.selectAll(); else ed.select(ed.scene.roots.filter((id) => !ed.obj(id)?.locked)); }
         return;
       }
       if (ed.viewport?.flying) return;
+      if (ed.tool === 'mesh') {
+        const me = ed.viewport!.mesh;
+        if (k === '1') me.setMode('vertex'); else if (k === '2') me.setMode('edge'); else if (k === '3') me.setMode('face');
+        else if (k === 'w') me.setGizmo('translate'); else if (k === 'e') me.setGizmo('rotate'); else if (k === 'r') me.setGizmo('scale');
+        else if (k === 'x') me.extrude(0.5); else if (k === 'i') me.inset(0.2);
+        else if (k === 'delete' || k === 'backspace') me.remove();
+        else if (k === 'escape' || k === 'enter') ed.stopMeshEdit();
+        else if (k === 'f') ed.viewport?.focus();
+        return;
+      }
       if (k === 'q') ed.setTool('select'); else if (k === 'w') ed.setTool('move'); else if (k === 'e') ed.setTool('rotate'); else if (k === 'r') ed.setTool('scale');
       else if (k === 'f') ed.viewport?.focus();
       else if (k === 'delete' || k === 'backspace') ed.remove();

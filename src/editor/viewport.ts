@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { applyTransform, buildNode, disposeNode, updateAnimations, type BuildCtx } from '../engine/build';
 import { cullByDistance } from '../engine/cull';
+import { MeshEdit } from './meshedit';
 import { Environment } from '../engine/environment';
 import { sampleCinematic } from '../engine/cinematic';
 import { PREFAB_MAP } from '../engine/prefabs';
@@ -21,6 +22,7 @@ export class Viewport {
   camera = new THREE.PerspectiveCamera(55, 1, 0.1, 30000);
   orbit: OrbitControls;
   gizmo: TransformControls;
+  mesh!: MeshEdit;
   env: Environment;
   root = new THREE.Group();
   nodes = new Map<string, THREE.Group>();
@@ -76,6 +78,7 @@ export class Viewport {
     this.gizmo.addEventListener('dragging-changed', (e: any) => this.onGizmoDrag(!!e.value));
     this.gizmo.addEventListener('objectChange', () => this.onGizmoChange());
     this.scene.add(this.gizmo.getHelper());
+    this.mesh = new MeshEdit(ed, this);
 
     this.grid = new THREE.GridHelper(400, 400, 0x5d6672, 0x343a43);
     (this.grid.material as THREE.Material).transparent = true;
@@ -95,7 +98,7 @@ export class Viewport {
     on(canvas, 'pointermove', (e) => this.onMove(e));
     on(canvas, 'pointerup', (e) => this.onUp(e));
     on(canvas, 'pointerleave', () => { this.pointer.inside = false; this.ring.visible = false; });
-    on(canvas, 'dblclick', () => this.finishTool());
+    on(canvas, 'dblclick', () => (this.ed.tool === 'mesh' ? this.mesh.growFlat() : this.finishTool()));
     on(canvas, 'contextmenu', (e) => e.preventDefault());
     on(window, 'keydown', (e: KeyboardEvent) => { if (this.fly) { this.keys.add(e.code); e.preventDefault(); } });
     on(window, 'keyup', (e: KeyboardEvent) => this.keys.delete(e.code));
@@ -147,6 +150,7 @@ export class Viewport {
     this.nodes.clear();
     this.ed.scene.roots.forEach((id) => this.addNode(id));
     this.applyEnv();
+    if (this.mesh?.id) this.mesh.sel.clear(); // undo/redo may have changed the mesh: old picks no longer apply
     this.onSelection();
   }
 
@@ -231,6 +235,17 @@ export class Viewport {
   }
 
   onToolChange() {
+    if (this.ed.tool === 'mesh') {
+      if (!this.mesh.id || !this.ed.obj(this.mesh.id)) { this.mesh.exit(); this.ed.tool = 'select'; }
+      else {
+        const sn = this.ed.opts;
+        this.gizmo.setTranslationSnap(sn.snap ? sn.grid : null); this.gizmo.setRotationSnap(sn.snap ? THREE.MathUtils.degToRad(15) : null); this.gizmo.setScaleSnap(sn.snap ? 0.1 : null);
+        this.ring.visible = false;
+        this.renderer.domElement.style.cursor = 'default';
+        this.mesh.refresh();
+        return;
+      }
+    } else if (this.mesh.id) this.mesh.exit();
     const t = this.ed.tool, id = this.ed.selection[this.ed.selection.length - 1], o = this.ed.obj(id), node = id ? this.nodes.get(id) : undefined;
     if ((t === 'move' || t === 'rotate' || t === 'scale') && node && o && !o.locked) {
       this.gizmo.setMode(t === 'move' ? 'translate' : t);
@@ -249,6 +264,7 @@ export class Viewport {
 
   private onGizmoDrag(dragging: boolean) {
     this.orbit.enabled = !dragging;
+    if (this.ed.tool === 'mesh') return this.mesh.gizmoDrag(dragging, this.pointer.shift);
     const ids = this.ed.topLevel(this.ed.selection);
     if (dragging) {
       this.ed.checkpoint();
@@ -261,6 +277,7 @@ export class Viewport {
   }
 
   private onGizmoChange() {
+    if (this.ed.tool === 'mesh') return this.mesh.gizmoChange();
     const node = this.gizmo.object as THREE.Object3D | undefined, id = node?.userData.id, o = this.ed.obj(id);
     if (!node || !o) return;
     if (this.gizmo.mode === 'translate' && this.dragStart.has(id)) {
@@ -418,7 +435,8 @@ export class Viewport {
       if (tool === 'wall' && last) this.makeWall(last, p);
       this.chain.push(p);
       this.setPreview(this.chain);
-    } else if (['select', 'move', 'rotate', 'scale'].includes(tool)) this.pickSelect(e);
+    } else if (tool === 'mesh') this.mesh.click(e);
+    else if (['select', 'move', 'rotate', 'scale'].includes(tool)) this.pickSelect(e);
   }
 
   private setPreview(pts: THREE.Vector3[]) {

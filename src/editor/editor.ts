@@ -4,12 +4,13 @@ import * as THREE from 'three';
 import type { Core } from '../engine/wasm';
 import { TerrainSystem, validSize, type TerrainData } from '../engine/terrain';
 import { clearAssetCaches } from '../engine/build';
+import { combine, fromGeometry, type MeshData } from '../engine/meshdata';
 import { PREFAB_MAP } from '../engine/prefabs';
 import { DEFAULT_LAYERS, ENV_PRESETS, KIND_DEFAULTS, makeObj, newProject, uid, type Asset, type AssetProvider, type Env, type Kind, type Obj, type Project, type Scene, type TerrainMeta, type Vec3 } from '../engine/types';
 import * as store from './storage';
 import type { Viewport } from './viewport';
 
-export type Tool = 'select' | 'move' | 'rotate' | 'scale' | 'sculpt' | 'paint' | 'scatter' | 'wall' | 'room' | 'road';
+export type Tool = 'select' | 'move' | 'rotate' | 'scale' | 'sculpt' | 'paint' | 'scatter' | 'wall' | 'room' | 'road' | 'mesh';
 export interface DropPayload { type: 'prefab' | 'kind' | 'asset' | 'userPrefab'; key: string; props?: Record<string, any>; name?: string }
 type Hist =
   | { kind: 'scene'; scene: Scene; sel: string[] }
@@ -441,6 +442,53 @@ export class Editor {
     this.viewport?.setTerrain(this.terrain);
     this.terrainDirty = true;
     this.clearHistory();
+  }
+
+  // ------------------------------------------------------------ mesh editing
+
+  /** Open the mesh editor on an editable mesh object. */
+  editMesh(id: string) {
+    if (this.obj(id)?.kind !== 'mesh' || !this.viewport) return;
+    this.select([id]);
+    this.viewport.mesh.enter(id);
+    this.setTool('mesh');
+  }
+  stopMeshEdit() { if (this.tool === 'mesh') this.setTool('select'); }
+
+  /**
+   * Turn any object with visible geometry (library asset, primitive, wall, imported model…) into an
+   * editable mesh with the same shape, position and colours. Children stay attached to the original,
+   * so an object with children is kept and the editable copy is added next to it.
+   */
+  makeEditable(id: string): Obj | null {
+    const o = this.obj(id), node = this.viewport?.nodes.get(id);
+    if (!o || !node || o.kind === 'mesh') return null;
+    node.updateWorldMatrix(true, true);
+    const inv = node.matrixWorld.clone().invert(), parts: MeshData[] = [];
+    let tris = 0;
+    const walk = (n: THREE.Object3D) => {
+      for (const c of n.children as any[]) {
+        if (c.userData.id || c.userData.helper) continue;
+        if (c.isMesh && c.geometry?.attributes.position && !c.isSkinnedMesh) {
+          const mats = Array.isArray(c.material) ? c.material : [c.material], mat = mats[mats.length - 1];
+          const list: THREE.Matrix4[] = [];
+          if (c.isInstancedMesh) for (let i = 0; i < Math.min(c.count, 400); i++) { const im = new THREE.Matrix4(); c.getMatrixAt(i, im); list.push(inv.clone().multiply(c.matrixWorld).multiply(im)); }
+          else list.push(inv.clone().multiply(c.matrixWorld));
+          for (const mx of list) { tris += (c.geometry.index ? c.geometry.index.count : c.geometry.attributes.position.count) / 3; if (tris <= 60000) parts.push(fromGeometry(c.geometry, mx, '#' + (mat?.color?.getHexString?.() ?? 'b8bcc4'))); }
+        }
+        walk(c);
+      }
+    };
+    walk(node);
+    if (!parts.length) { this.toast('This object has no geometry that can be edited.', 'error'); return null; }
+    if (tris > 60000) this.toast('Only the first 60,000 triangles were converted. Optimise the model first for a lighter editable mesh.');
+    this.checkpoint();
+    const made = this.spawn('mesh', `${o.name} (editable)`, { ...combine(parts), solid: o.props.solid !== false }, [...o.pos] as Vec3, o.parent, { rot: [...o.rot] as Vec3, scale: [...o.scale] as Vec3 });
+    if (o.children.length) this.toast('The original has attached objects, so it was kept. The editable copy sits in the same place – hide or delete the original when you are happy.');
+    else this.removeRec(id);
+    this.select([made.id]);
+    this.touch();
+    return made;
   }
 
   /** Keep objects sitting on the ground when the terrain underneath them is created or replaced. */
