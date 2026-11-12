@@ -58,7 +58,7 @@ Everything below is driven from the visual editor; nothing requires code.
 - **Cinematics**: timeline with camera keyframes taken from the viewport, easing, field of view, subtitles, title card, fades, letterbox, synchronised audio, preview scrubbing; playable from events, returning control to the player afterwards.
 - **Atmosphere**: sun position, colours, ambient light, fog, shadows, rain and snow, exposure, bloom, saturation and contrast, optional day/night cycle, eight presets plus your own saved presets.
 - **Audio**: music, ambient and positional 3D sources, looping, fades, distance settings, event-triggered playback.
-- **Projects**: new, open, autosave (every 20 s), rename, duplicate, delete, version history with restore, import/export as an archive, eleven starter templates (including a furnished **Computer lab**) plus a **Feature showcase** world that demonstrates every system in one guided tour (it generates its own image, GIF and sounds, so it needs no downloads).
+- **Projects**: new, open, autosave (every 20 s), rename, duplicate, delete, version history with restore, import/export as an archive, twelve starter templates (including a furnished **Computer lab** and an **AUST Achrafieh campus** sample that downloads the real elevation for its location when created) plus a **Feature showcase** world that demonstrates every system in one guided tour (it generates its own image, GIF and sounds, so it needs no downloads).
 - **Publishing**: validation report (missing spawn, broken references, missing assets, unconfigured interactions, performance warnings), standalone web build, plus exports of the complete project, assets and world data.
 
 ## Occlusion culling

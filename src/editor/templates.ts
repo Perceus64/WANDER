@@ -3,8 +3,9 @@
 import * as THREE from 'three';
 import { ENV_PRESETS, uid, type CamKey, type Cinematic, type EventRule, type Obj, type Vec3 } from '../engine/types';
 import type { Editor } from './editor';
+import * as geo from './geo';
 
-export interface Template { key: string; name: string; blurb: string; build(ed: Editor): void }
+export interface Template { key: string; name: string; blurb: string; build(ed: Editor): void | Promise<void> }
 
 const rnd = (seed: number) => () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
 const env = (ed: Editor, name: string) => Object.assign(ed.scene.env, structuredClone(ENV_PRESETS[name]));
@@ -308,6 +309,117 @@ function buildComputerLab(ed: Editor) {
   void door;
 }
 
+/**
+ * AUST Achrafieh campus sample. Ground elevation is downloaded for the campus location when the
+ * world is created; the blocks, parking, lawn and court are traced from the campus block plan.
+ * Positions are measured on that plan (about 0.207 m per pixel, taken from the basketball court)
+ * and assume the plan is drawn north-up.
+ */
+async function buildAustCampus(ed: Editor) {
+  const LAT = 33.884, LON = 35.52016, HALF = 170, S = 0.207;
+  const m = (px: number, py: number): [number, number] => [Math.round((px - 345) * S * 100) / 100, Math.round((py - 253) * S * 100) / 100];
+  const r2 = (v: number) => Math.round(v * 100) / 100;
+
+  // ---- 1. real-world elevation (falls back to gentle generated ground when offline)
+  let real = false;
+  try {
+    const dLat = HALF / 110540, dLon = HALF / (111320 * Math.cos((LAT * Math.PI) / 180));
+    const plan = geo.planImport([LON - dLon, LAT - dLat, LON + dLon, LAT + dLat], 257), prov = geo.PROVIDERS[0];
+    const res = await Promise.race([geo.fetchElevation(ed, plan, prov, () => {}), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 25000))]);
+    geo.installGeoTerrain(ed, plan, res.heights, 1, prov);
+    for (let i = 0; i < 3; i++) ed.terrain!.brush(2, 0, 0, HALF * 1.6, 1); // the source data is ~30 m per sample: soften the steps
+    real = true;
+  } catch {
+    ed.createTerrain({ size: 257, cell: 1.33, seed: 7, amplitude: 5, frequency: 0.004, flat: false });
+    ed.toast('Elevation for Achrafieh could not be downloaded, so the campus was built on gently sloping placeholder ground. With a connection, use World → Import real place → Replace to load the real elevation; everything stays on the ground.', 'error');
+  }
+  const T = ed.terrain!, gy = (x: number, z: number) => ed.heightAt(x, z);
+  Object.assign(ed.scene.env, structuredClone(ENV_PRESETS['Sunny afternoon']), { bloom: 0.1, fogDensity: 0.0008 });
+
+  // ---- 2. ground surfaces painted onto the terrain
+  const inside = (pts: [number, number][], x: number, z: number) => { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const [xi, zi] = pts[i], [xj, zj] = pts[j]; if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) c = !c; } return c; };
+  const yard = ([[262, 288], [300, 230], [305, 140], [345, 135], [400, 118], [400, 55], [455, 50], [500, 32], [560, 26], [600, 60], [645, 150], [668, 240], [662, 330], [668, 470], [600, 482], [435, 472], [435, 345], [300, 398], [190, 392], [188, 335], [262, 326]] as [number, number][]).map(([a, b]) => m(a, b));
+  const courtC = m(507, 433), courtY = gy(courtC[0], courtC[1]);
+  for (let i = 0; i < 6; i++) T.brush(3, courtC[0], courtC[1], 19, 1, courtY);
+  for (let x = -34; x <= 70; x += 2.5) for (let z = -50; z <= 50; z += 2.5) if (inside(yard, x, z)) for (let i = 0; i < 3; i++) T.paint(7, x, z, 3, 1);
+  const grass = (px: number, py: number, rad: number) => { const [x, z] = m(px, py); for (let i = 0; i < 5; i++) T.paint(0, x, z, rad, 1); };
+  for (let a = 0; a < 6.28; a += 0.5) grass(577 + Math.cos(a) * 26, 255 + Math.sin(a) * 18, 4.2);
+  grass(577, 255, 6);
+  ([[612, 118], [632, 140], [650, 168], [664, 200], [672, 235], [674, 270], [668, 300], [650, 322], [618, 334], [585, 342], [556, 350]] as [number, number][]).forEach(([a, b]) => grass(a, b, 4.2));
+  grass(272, 292, 2.2);
+
+  // ---- 3. the blocks, traced from the plan (heights are placeholders: set the real number of storeys in the Inspector)
+  const campus = ed.spawn('group', 'AUST Achrafieh campus', { folder: true }, [0, 0, 0]);
+  const blocks = ed.spawn('group', 'Blocks', { folder: true }, [0, 0, 0], campus.id), labels = ed.spawn('group', 'Signs and information', { folder: true }, [0, 0, 0], campus.id);
+  const BLOCKS: [string, number, string, [number, number][], [number, number]][] = [
+    ['Block A', 17.5, '#d8d2c4', [[585, 388], [648, 380], [668, 468], [628, 478], [585, 440]], [572, 420]],
+    ['Block B', 21, '#d8d2c4', [[500, 38], [545, 30], [570, 45], [590, 95], [585, 140], [560, 170], [530, 162], [515, 122]], [545, 185]],
+    ['Block M', 10.5, '#d8d2c4', [[405, 58], [450, 58], [450, 100], [405, 100]], [428, 112]],
+    ['Block L', 17.5, '#d9a05b', [[455, 130], [505, 120], [520, 165], [500, 185], [465, 192], [448, 160]], [488, 204]],
+    ['Block N', 17.5, '#d9a05b', [[368, 160], [425, 148], [442, 185], [430, 205], [385, 210], [365, 190]], [408, 222]],
+    ['Block I', 17.5, '#d9a05b', [[310, 150], [345, 143], [362, 200], [350, 222], [318, 215], [303, 180]], [338, 236]],
+    ['Block H', 14, '#d8d2c4', [[300, 280], [345, 268], [358, 318], [318, 338], [296, 318]], [372, 300]],
+    ['Block G', 7, '#d8d2c4', [[238, 322], [275, 318], [290, 345], [280, 362], [240, 362]], [300, 352]],
+    ['CCE Workshop', 5, '#c9c4b8', [[192, 340], [236, 346], [236, 364], [298, 374], [292, 392], [205, 388], [190, 365]], [262, 402]],
+    ['Small building (unlabelled on the plan)', 4, '#e3ded2', [[352, 234], [400, 224], [407, 252], [360, 262]], [380, 272]],
+  ];
+  for (const [name, height, color, px, sign] of BLOCKS) {
+    const pts = px.map(([a, b]) => m(a, b)), cx = pts.reduce((n, q) => n + q[0], 0) / pts.length, cz = pts.reduce((n, q) => n + q[1], 0) / pts.length;
+    ed.spawn('poly', name, { points: pts.map(([x, z]) => [r2(x - cx), r2(z - cz)]), height, color, opacity: 1, windows: height > 6 }, [r2(cx), 0, r2(cz)], blocks.id);
+    const [sx, sz] = m(sign[0], sign[1]), y = gy(sx, sz), short = name.replace(/ \(.*/, '');
+    ed.spawn('text', `${short} sign`, { text: short.toUpperCase(), width: Math.max(2.2, short.length * 0.3), height: 0.55, color: '#ffffff', background: '#123a6b' }, [sx, r2(y + 1.9), sz], labels.id, { rot: [0, Math.atan2(sx - cx, sz - cz) * 57.3, 0] });
+    ed.spawn('primitive', `${short} sign post`, { shape: 'cylinder', color: '#55606c', solid: false }, [sx, r2(y + 0.95), sz], labels.id, { scale: [0.08, 1.9, 0.08] });
+    if (!name.startsWith('Small')) info(ed, short, `**${short}**, traced from the campus block plan.\n\nReplace this text with the departments, labs and offices in this block. The building height is a placeholder – set it in the Inspector.`, [sx, r2(y + 1.5), sz + 0.4], { distance: 4, template: 'education' }, labels.id);
+  }
+
+  // ---- 4. parking, lawn, palms, garden and the basketball court
+  const land = ed.spawn('group', 'Grounds', { folder: true }, [0, 0, 0], campus.id);
+  const put = (key: string, px: number, py: number, rot = 0, name?: string) => { const [x, z] = m(px, py); return prefab(ed, key, x, z, rot, land.id, gy(x, z), name); };
+  ([[447, 210], [468, 200], [490, 191], [514, 182]] as [number, number][]).forEach(([a, b], i) => put('tree_palm', a, b, i * 50, `Palm ${i + 1}`));
+  put('potted_plant', 427, 220);
+  ([[468, 352], [482, 366], [496, 354], [476, 378], [548, 340], [562, 350], [575, 338]] as [number, number][]).forEach(([a, b]) => put('bush', a, b));
+  ([[625, 130], [655, 185], [672, 250], [660, 312]] as [number, number][]).forEach(([a, b], i) => put('tree_oak', a, b, i * 70));
+  put('tree_oak', 560, 250, 20); put('tree_oak', 598, 262, 140); put('bench', 577, 300, 180); put('bench', 540, 215, 0); put('street_lamp', 520, 300, 90); put('street_lamp', 420, 300, -90); put('trash_bin', 590, 300);
+  ([[412, 278], [428, 276], [444, 274], [476, 300], [492, 298]] as [number, number][]).forEach(([a, b], i) => put('car', a, b, i < 3 ? 8 : 100, `Parked car ${i + 1}`));
+  ed.spawn('text', 'Parking sign', { text: 'PARKING', width: 2.4, height: 0.6, color: '#ffffff', background: '#1d5fa8' }, [m(456, 240)[0], r2(gy(...m(456, 240)) + 2), m(456, 240)[1]], labels.id);
+  const court = ed.addAsset(pngFile('Basketball court.png', 560, 300, (g) => {
+    g.fillStyle = '#b9bcc0'; g.fillRect(0, 0, 560, 300);
+    g.strokeStyle = '#ffffff'; g.lineWidth = 5; g.strokeRect(12, 12, 536, 276);
+    g.beginPath(); g.moveTo(280, 12); g.lineTo(280, 288); g.stroke(); g.beginPath(); g.arc(280, 150, 38, 0, 6.3); g.stroke();
+    for (const sx of [12, 548]) { const d = sx === 12 ? 1 : -1; g.strokeRect(sx, 102, 112 * d, 96); g.beginPath(); g.arc(sx + 112 * d, 150, 38, 0, 6.3); g.stroke(); g.beginPath(); g.arc(sx + 30 * d, 150, 132, -1.25, 1.25, d < 0); g.stroke(); }
+  }), 'image');
+  ed.spawn('primitive', 'Basketball court', { shape: 'plane', color: '#ffffff', texture: court, roughness: 0.9 }, [courtC[0], r2(courtY + 0.04), courtC[1]], land.id, { scale: [30, 1, 16] });
+  for (const sx of [-1, 1]) {
+    ed.spawn('primitive', 'Hoop post', { shape: 'cylinder', color: '#2a2e35' }, [r2(courtC[0] + sx * 15.4), r2(courtY + 1.6), courtC[1]], land.id, { scale: [0.16, 3.2, 0.16] });
+    ed.spawn('primitive', 'Backboard', { shape: 'box', color: '#f2f2f0', solid: false }, [r2(courtC[0] + sx * 14.5), r2(courtY + 3.2), courtC[1]], land.id, { scale: [0.08, 1.05, 1.8] });
+    ed.spawn('primitive', 'Hoop arm', { shape: 'box', color: '#2a2e35', solid: false }, [r2(courtC[0] + sx * 14.95), r2(courtY + 3.1), courtC[1]], land.id, { scale: [0.9, 0.08, 0.08] });
+    ed.spawn('primitive', 'Hoop', { shape: 'cylinder', color: '#e8642a', solid: false }, [r2(courtC[0] + sx * 14.15), r2(courtY + 3.0), courtC[1]], land.id, { scale: [0.46, 0.04, 0.46] });
+  }
+
+  // ---- 5. surrounding streets, approximated from the grey bands on the plan
+  const street = (name: string, px: [number, number][], width: number) => { const pts = px.map(([a, b]) => m(a, b)); ed.spawn('road', name, { points: pts.map(([x, z]) => [r2(x - pts[0][0]), r2(z - pts[0][1])]), width, sidewalks: false }, [pts[0][0], 0, pts[0][1]], land.id); };
+  street('Street (north)', [[0, 228], [110, 172], [215, 98], [330, 58], [460, 22], [560, 0]], 7);
+  street('Street (west)', [[18, 0], [18, 500]], 7);
+  street('Street (north-west)', [[215, 0], [215, 98]], 6);
+  street('Campus entrance drive', [[330, 62], [340, 128], [372, 236], [430, 268]], 4.5);
+
+  // ---- 6. visitor start, a campus tour and guidance
+  const [sx, sz] = m(455, 300);
+  spawnAt(ed, sx, sz, 0);
+  const board = put('info_board', 440, 318, 160, 'Campus map board');
+  board.props.interactable = true; board.props.prompt = 'Start the campus flyover';
+  const top = (px: number, py: number, up: number): Vec3 => { const [x, z] = m(px, py); return [x, r2(gy(x, z) + up), z]; };
+  const tour = cinematic(ed, 'Campus flyover', 18, [camKey(0, top(455, 320, 3), top(455, 200, 6)), camKey(5, top(600, 420, 38), top(470, 250, 0), 60), camKey(10, top(330, 60, 34), top(430, 240, 0), 60), camKey(14, top(230, 420, 30), top(400, 250, 2), 58), camKey(18, top(455, 330, 2.2), top(455, 200, 6), 50)],
+    { title: 'AUST · ACHRAFIEH', subtitles: [{ t: 1.5, d: 3.5, text: 'Blocks I, N and L line the north side of the parking.' }, { t: 6, d: 3.5, text: 'Block B and Block A stand on the east side, beside the lawn and the court.' }, { t: 11, d: 4, text: 'Blocks H and G and the CCE Workshop are to the south-west.' }] });
+  rule(ed, 'Welcome', { type: 'start' }, [{ type: 'objective', text: 'Explore the campus' }, { type: 'message', text: real ? 'The ground follows real elevation data for Achrafieh. Walk up to a sign to read about a block.' : 'Walk up to a sign to read about a block.', seconds: 7 }, { type: 'wait', seconds: 7 }, { type: 'message', text: 'Use the map board beside you for a flyover of the campus.', seconds: 6 }]);
+  rule(ed, 'Flyover from the map board', { type: 'interact', target: board.id }, [{ type: 'cinematic', id: tour.id }], false);
+  rule(ed, 'After the flyover', { type: 'cinematicEnd', target: tour.id }, [{ type: 'objective', text: '' }], false);
+  ed.project.description = 'AUST Achrafieh campus sample: blocks traced from the campus plan on real-world elevation.';
+  T.markAllDirty();
+  ed.terrainChanged();
+  ed.viewport?.frameAll();
+}
+
 export const TEMPLATES: Template[] = [
   { key: 'showcase', name: 'Feature showcase', blurb: 'A guided tour of everything: terrain, a two-storey building, machinery, screens, events, a cinematic and more.', build: buildShowcase },
   { key: 'blank', name: 'Empty world', blurb: 'A clean grid. Start from nothing.', build(ed) { spawnAt(ed, 0, 6, 0); } },
@@ -502,6 +614,7 @@ export const TEMPLATES: Template[] = [
       rule(ed, 'Door hint', { type: 'near', target: door.id, value: 2.5 }, [{ type: 'message', text: 'Locked. There must be a key somewhere near the campfire.', seconds: 5 }], true, [{ name: 'hasKey', op: '=', value: 0 }]);
     },
   },
+  { key: 'aust', name: 'AUST Achrafieh campus', blurb: 'Sample of the Achrafieh campus: real elevation for the location, with the blocks, parking, lawn and court traced from the campus plan.', build: buildAustCampus },
   { key: 'computerlab', name: 'Computer lab', blurb: 'Twelve workstations, a teaching wall with a lesson screen, a server corner and a find-the-USB-drives activity.', build: buildComputerLab },
   {
     key: 'gallery', name: 'Virtual art gallery', blurb: 'White-cube gallery with spot-lit canvases and click-to-read labels.',

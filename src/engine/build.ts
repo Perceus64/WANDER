@@ -172,6 +172,31 @@ async function gifTexture(data: ArrayBuffer, alive: () => boolean): Promise<THRE
   return tex;
 }
 
+const facades = new Map<string, THREE.Texture>();
+/** One wall bay with a window, tiled across building walls. */
+function facadeTexture(color: string): THREE.Texture {
+  let t = facades.get(color);
+  if (t) return t;
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 140;
+  const g = c.getContext('2d')!;
+  g.fillStyle = color; g.fillRect(0, 0, 128, 140);
+  g.fillStyle = 'rgba(0,0,0,0.10)'; g.fillRect(0, 0, 128, 5);
+  g.fillStyle = '#f1efe9'; g.fillRect(26, 34, 76, 66);
+  g.fillStyle = '#5f86a8'; g.fillRect(31, 39, 66, 56);
+  g.fillStyle = '#84a9c8'; g.fillRect(31, 39, 66, 20);
+  g.fillStyle = '#f1efe9'; g.fillRect(62, 39, 4, 56);
+  g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(22, 100, 84, 5);
+  t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(1 / 3.2, 1 / 3.5);
+  t.anisotropy = 4;
+  t.userData.shared = true;
+  facades.set(color, t);
+  return t;
+}
+
 const BUILDERS: Partial<Record<Obj['kind'], Builder>> = {
   primitive(o, node, ctx) {
     const p = o.props;
@@ -433,7 +458,9 @@ const BUILDERS: Partial<Record<Obj['kind'], Builder>> = {
     const g: THREE.BufferGeometry = p.height > 0 ? new THREE.ExtrudeGeometry(shape, { depth: p.height + (Math.max(...hs) - Math.min(...hs)), bevelEnabled: false }) : new THREE.ShapeGeometry(shape);
     g.rotateX(-Math.PI / 2);
     const flat = !(p.height > 0);
-    const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: p.color, roughness: flat ? 0.2 : 0.9, metalness: flat ? 0.25 : 0, transparent: p.opacity < 1, opacity: p.opacity, side: THREE.DoubleSide }));
+    const base0 = new THREE.MeshStandardMaterial({ color: p.color, roughness: flat ? 0.2 : 0.9, metalness: flat ? 0.25 : 0, transparent: p.opacity < 1, opacity: p.opacity, side: THREE.DoubleSide });
+    // Extruded buildings can show a repeating window grid on their walls (one bay per 3.2 m, one storey per 3.5 m).
+    const m = new THREE.Mesh(g, !flat && p.windows ? [base0, new THREE.MeshStandardMaterial({ map: facadeTexture(p.color), roughness: 0.85, side: THREE.DoubleSide })] : base0);
     const base = flat ? hs.reduce((a, b) => a + b, 0) / hs.length + 0.06 : Math.min(...hs);
     m.position.y = base - o.pos[1];
     if (flat) m.userData.noShadowCast = true;
@@ -511,6 +538,6 @@ export function disposeNode(node: THREE.Object3D, shared = new Set<any>([prefabM
     if (m.userData?.id && m !== node) return;
     if (m.geometry && !m.geometry.userData?.shared && !(m.isMesh && m.material === prefabMaterial())) m.geometry.dispose?.();
     const mats = Array.isArray(m.material) ? m.material : m.material ? [m.material] : [];
-    for (const mt of mats) if (!shared.has(mt)) { mt.map?.dispose?.(); mt.dispose?.(); }
+    for (const mt of mats) if (!shared.has(mt)) { if (!mt.map?.userData?.shared) mt.map?.dispose?.(); mt.dispose?.(); }
   });
 }

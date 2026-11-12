@@ -25,7 +25,7 @@ export function ProjectsModal({ onClose, canClose }: { onClose(): void; canClose
     await ed.load(newProject(name.trim() || 'My world'), new Map());
     const t = TEMPLATES.find((x) => x.key === key)!;
     ed.project.description = key === 'blank' ? '' : t.blurb;
-    t.build(ed);
+    await t.build(ed);
     ed.select([]);
     ed.viewport?.reset();
     await ed.save('Created from template');
